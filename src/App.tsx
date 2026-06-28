@@ -5,6 +5,7 @@ import {
   ShoppingCart, 
   ChevronRight, 
   ChevronLeft, 
+  ChevronDown,
   X, 
   RefreshCw, 
   CheckCircle2, 
@@ -49,7 +50,53 @@ interface CartItem {
   quantity: number;
 }
 
-// ProductImage component with sequential fallback checking
+// Background helper to pre-download and cache all valid product images in the browser
+const preloadAndCacheAllProducts = async (productsToCache: Product[]) => {
+  if (typeof window === "undefined" || !("caches" in window)) return;
+  try {
+    const cache = await caches.open("product-images-v1");
+    const chunkSize = 4; // Fetch in small, staggered chunks to prevent UI thread lock or network overload
+    for (let i = 0; i < productsToCache.length; i += chunkSize) {
+      const chunk = productsToCache.slice(i, i + chunkSize);
+      await Promise.all(
+        chunk.map(async (p) => {
+          const possibleUrls = [
+            `/${p.id}.jpg`,
+            `/${p.id}.jpeg`,
+            `/products/${p.id}.jpg`,
+            `/images/${p.id}.jpg`,
+            p.extraAttributes?.["Image URLs"]?.trim()
+          ].filter(Boolean) as string[];
+
+          for (const url of possibleUrls) {
+            try {
+              // If already cached, we can bypass to save bandwidth
+              const cached = await cache.match(url);
+              if (cached) break;
+
+              // Download and cache it
+              const isExternal = url.startsWith("http://") || url.startsWith("https://");
+              const fetchOptions: RequestInit = isExternal ? { mode: "no-cors" } : {};
+              const response = await fetch(url, fetchOptions);
+              if (response.ok || isExternal) {
+                await cache.put(url, response);
+                break; // Found working image for this product, skip other fallbacks
+              }
+            } catch {
+              // Try next fallback extension or URL
+            }
+          }
+        })
+      );
+      // Wait a tiny moment between chunks to let other browser operations breathe
+      await new Promise(resolve => setTimeout(resolve, 60));
+    }
+  } catch (err) {
+    console.warn("Background image preloader encountered an error:", err);
+  }
+};
+
+// ProductImage component with sequential fallback checking and direct browser cache storage interceptor
 const ProductImage: React.FC<{
   id: string;
   name: string;
@@ -65,13 +112,53 @@ const ProductImage: React.FC<{
 
   const [imgSrc, setImgSrc] = useState<string>(getInitialSrc);
   const [attempt, setAttempt] = useState<number>(0);
+  const [cachedUrl, setCachedUrl] = useState<string>("");
 
   useEffect(() => {
     // Keep state updated if id or version attributes change
     const suffix = version ? `?v=${version}` : "";
     setImgSrc(`/${id}.jpg${suffix}`);
     setAttempt(0);
+    setCachedUrl("");
   }, [id, version]);
+
+  // Intercept cache and load directly as a local Blob to ensure instant offline/cached rendering
+  useEffect(() => {
+    if (attempt === 5 || !imgSrc) return;
+    let active = true;
+    let objectUrl = "";
+
+    const checkCache = async () => {
+      if (typeof window !== "undefined" && "caches" in window) {
+        try {
+          const cache = await caches.open("product-images-v1");
+          const matched = await cache.match(imgSrc);
+          if (matched && active) {
+            const blob = await matched.blob();
+            if (active) {
+              objectUrl = URL.createObjectURL(blob);
+              setCachedUrl(objectUrl);
+              return;
+            }
+          }
+        } catch (err) {
+          console.warn("Cache match failed, serving natively", err);
+        }
+      }
+      if (active) {
+        setCachedUrl("");
+      }
+    };
+
+    checkCache();
+
+    return () => {
+      active = false;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [imgSrc, attempt]);
 
   const handleImgError = () => {
     const suffix = version ? `?v=${version}` : "";
@@ -96,6 +183,26 @@ const ProductImage: React.FC<{
     }
   };
 
+  const handleImgLoad = async () => {
+    // Cache the loaded source if loaded natively so it's cached on the device for next time
+    if (imgSrc && !cachedUrl && typeof window !== "undefined" && "caches" in window) {
+      try {
+        const cache = await caches.open("product-images-v1");
+        const matched = await cache.match(imgSrc);
+        if (!matched) {
+          const isExternal = imgSrc.startsWith("http://") || imgSrc.startsWith("https://");
+          const fetchOptions: RequestInit = isExternal ? { mode: "no-cors" } : {};
+          const response = await fetch(imgSrc, fetchOptions);
+          if (response.ok || isExternal) {
+            await cache.put(imgSrc, response);
+          }
+        }
+      } catch {
+        // Silently ignore caching errors
+      }
+    }
+  };
+
   if (attempt === 5) {
     const initials = name.trim().slice(0, 3).toUpperCase();
     return (
@@ -113,9 +220,10 @@ const ProductImage: React.FC<{
 
   return (
     <img
-      src={imgSrc}
+      src={cachedUrl || imgSrc}
       alt={name}
       onError={handleImgError}
+      onLoad={handleImgLoad}
       className={`w-full h-full object-cover transition-all duration-500 ${isOutOfStock ? "grayscale contrast-75 brightness-95 opacity-40 bg-slate-50" : "hover:scale-105"}`}
       loading="lazy"
     />
@@ -149,6 +257,13 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedParentCategory, setSelectedParentCategory] = useState<string>("All");
   const [selectedSubCategory, setSelectedSubCategory] = useState<string>("All");
+  const [selectedCostCategoryName, setSelectedCostCategoryName] = useState<string>("All");
+  const [costCategories, setCostCategories] = useState<{
+    symbolToName: Record<string, string>;
+    productIdToSymbol: Record<string, string>;
+  }>({ symbolToName: {}, productIdToSymbol: {} });
+  const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState<boolean>(false);
+  const [isStockDropdownOpen, setIsStockDropdownOpen] = useState<boolean>(false);
   const [stockFilter, setStockFilter] = useState<string>("all"); // 'all' | 'in-stock' | 'out-of-stock' | 'always-stock'
   const [sortKey, setSortKey] = useState<string>("name-asc"); // 'name-asc' | 'price-asc' | 'price-desc' | 'id-asc'
   
@@ -550,6 +665,11 @@ export default function App() {
           }
         }
         setProducts(uniqueProducts);
+        // Start pre-downloading and caching images to device in the background
+        preloadAndCacheAllProducts(uniqueProducts);
+        if (data.costCategories) {
+          setCostCategories(data.costCategories);
+        }
         setSyncTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       } else {
         throw new Error("Invalid format returned by server");
@@ -720,6 +840,11 @@ export default function App() {
       result = result.filter(p => p.alwaysStock);
     }
 
+    // 3.5 Cost Category Filter (from Col F of Cost tab)
+    if (selectedCostCategoryName !== "All") {
+      result = result.filter(p => p.costCategoryName === selectedCostCategoryName);
+    }
+
     // 4. Sorting
     result.sort((a, b) => {
       const priceA = parseFloat(a.price) || 0;
@@ -743,7 +868,7 @@ export default function App() {
     });
 
     return result;
-  }, [products, searchQuery, selectedParentCategory, selectedSubCategory, stockFilter, sortKey]);
+  }, [products, searchQuery, selectedParentCategory, selectedSubCategory, stockFilter, sortKey, selectedCostCategoryName]);
 
   // Page Calculations
   const totalPages = 1;
@@ -972,6 +1097,59 @@ export default function App() {
                         <span className="text-[9px] text-slate-400 font-medium font-bold">配置實時同步與 Apps Script 設置</span>
                       </div>
                     </button>
+                  </div>
+                </div>
+
+                {/* Folder Storage Explorer Disk Card */}
+                <div 
+                  onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+                  onDragLeave={() => setIsDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragOver(false);
+                    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+                      addFilesToQueue(Array.from(e.dataTransfer.files));
+                      setIsUploadOpen(true);
+                    }
+                  }}
+                  className={`bg-gradient-to-br from-amber-50 to-orange-50/50 rounded-2xl border ${isDragOver ? "border-amber-400 ring-2 ring-amber-350" : "border-amber-100 hover:border-amber-200"} p-5 shadow-sm space-y-4 transition-all relative overflow-hidden group`}
+                >
+                  {/* Backlight / Folder Accent effect */}
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-amber-200/20 rounded-full blur-xl -mr-6 -mt-6"></div>
+                  
+                  <div className="flex items-start justify-between relative z-10">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-600 flex items-center justify-center shadow-inner">
+                        <Folder className="w-5 h-5 text-amber-600 fill-amber-100" />
+                      </div>
+                      <div>
+                        <h4 className="font-extrabold text-xs text-amber-900 group-hover:text-amber-950 transition-colors uppercase tracking-wider">
+                          包含圖片資源庫
+                        </h4>
+                        <p className="text-[10px] text-amber-705 font-medium font-mono text-amber-700">
+                          存儲路徑: /public
+                        </p>
+                      </div>
+                    </div>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-850 border border-amber-500/30 font-mono">
+                      {serverImages.length} 個文件
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-amber-800 leading-relaxed font-medium relative z-10">
+                    這是在伺服器磁碟上保存商品目錄圖片的資料夾。拖拽圖片至此，或直接打開資料夾查看管理器！
+                  </p>
+
+                  {/* Drag Drop Inner Indicator Line */}
+                  <div 
+                    className="border border-dashed border-amber-300/60 rounded-xl p-3 bg-white/60 hover:bg-white/90 text-center cursor-pointer transition-all z-10 relative shadow-sm"
+                    onClick={() => setIsFolderExplorerOpen(true)}
+                  >
+                    <div className="flex items-center justify-center gap-1.5">
+                      <FolderOpen className="w-4 h-4 text-amber-600" />
+                      <span className="text-xs font-bold text-amber-900">打開資料夾管理器</span>
+                    </div>
+                    <p className="text-[9px] text-amber-600 mt-1">拖拽新相片至此卡片可直接上傳添加</p>
                   </div>
                 </div>
 
@@ -1216,8 +1394,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* Parent Category List Filter */}
-            <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm space-y-4">
+            {/* Parent Category List Filter - Dropdown Button Version */}
+            <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm space-y-3 relative">
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
                   <Filter className="w-3.5 h-3.5 text-slate-400" />
@@ -1225,7 +1403,10 @@ export default function App() {
                 </h3>
                 {selectedParentCategory !== "All" && (
                   <button
-                    onClick={() => handleParentCategoryChange("All")}
+                    onClick={() => {
+                      handleParentCategoryChange("All");
+                      setIsCategoryDropdownOpen(false);
+                    }}
                     className="text-[11px] text-indigo-600 hover:text-indigo-900 font-bold transition-all"
                   >
                     清除篩選
@@ -1234,39 +1415,58 @@ export default function App() {
               </div>
 
               {loading ? (
-                <div id="cat-loading" className="space-y-2.5 py-2">
-                  {[1, 2, 3, 4, 5].map(i => (
-                    <div key={i} className="h-6 bg-slate-50 animate-pulse rounded-lg"></div>
-                  ))}
-                </div>
+                <div id="cat-loading" className="h-10 bg-slate-50 animate-pulse rounded-xl"></div>
               ) : (
-                <nav className="flex flex-col gap-1 max-h-[350px] overflow-y-auto pr-1">
+                <div className="relative">
                   <button
-                    onClick={() => handleParentCategoryChange("All")}
-                    className={`text-left px-3 py-2 rounded-xl transition-all font-medium text-xs flex items-center justify-between ${selectedParentCategory === "All" ? "bg-slate-900 text-white" : "hover:bg-slate-50 text-slate-600 hover:text-slate-900"}`}
+                    type="button"
+                    onClick={() => setIsCategoryDropdownOpen(!isCategoryDropdownOpen)}
+                    className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 border border-slate-200 hover:bg-slate-100/50 rounded-xl text-xs font-semibold text-slate-700 transition-all outline-none"
                   >
-                    <span>全部商品</span>
-                    <span className="text-[10px] opacity-70 font-mono">({products.length})</span>
+                    <span className="truncate">
+                      {selectedParentCategory === "All" ? "全部商品" : selectedParentCategory}
+                    </span>
+                    <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isCategoryDropdownOpen ? "rotate-180" : ""}`} />
                   </button>
 
-                  {topCategories.map(parentCat => {
-                    const count = products.filter(p => {
-                      const rawCat = p.extraAttributes["Categories"] || "";
-                      return (rawCat.split("/")[0]?.trim() || "Other") === parentCat;
-                    }).length;
-
-                    return (
+                  {isCategoryDropdownOpen && (
+                    <div className="absolute left-0 right-0 mt-1.5 bg-white border border-slate-150 rounded-xl shadow-lg z-50 max-h-[250px] overflow-y-auto py-1">
                       <button
-                        key={parentCat}
-                        onClick={() => handleParentCategoryChange(parentCat)}
-                        className={`text-left px-3 py-2 rounded-xl transition-all font-medium text-xs flex items-center justify-between ${selectedParentCategory === parentCat ? "bg-slate-900 text-white font-semibold" : "hover:bg-slate-50 text-slate-600 hover:text-slate-900"}`}
+                        type="button"
+                        onClick={() => {
+                          handleParentCategoryChange("All");
+                          setIsCategoryDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 text-xs font-medium hover:bg-slate-50 flex items-center justify-between ${selectedParentCategory === "All" ? "bg-slate-50 text-indigo-650 font-bold" : "text-slate-650"}`}
                       >
-                        <span className="truncate pr-2">{parentCat}</span>
-                        <span className="text-[10px] opacity-70 font-mono">({count})</span>
+                        <span>全部商品</span>
+                        <span className="text-[10px] text-slate-400 font-mono">({products.length})</span>
                       </button>
-                    );
-                  })}
-                </nav>
+
+                      {topCategories.map(parentCat => {
+                        const count = products.filter(p => {
+                          const rawCat = p.extraAttributes["Categories"] || "";
+                          return (rawCat.split("/")[0]?.trim() || "Other") === parentCat;
+                        }).length;
+
+                        return (
+                          <button
+                            key={parentCat}
+                            type="button"
+                            onClick={() => {
+                              handleParentCategoryChange(parentCat);
+                              setIsCategoryDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 text-xs font-medium hover:bg-slate-50 flex items-center justify-between ${selectedParentCategory === parentCat ? "bg-slate-50 text-indigo-650 font-bold" : "text-slate-650"}`}
+                          >
+                            <span className="truncate pr-2">{parentCat}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">({count})</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
@@ -1307,82 +1507,65 @@ export default function App() {
               </div>
             )}
 
-            {/* Inventory Status Fast Filters */}
-            <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm space-y-3">
-              <h3 className="font-bold text-slate-800 text-xs uppercase tracking-wider">
-                庫存狀態
-              </h3>
-              <div className="space-y-1.5">
-                {[
-                  { value: "all", label: "顯示全部商品" },
-                  { value: "in-stock", label: "僅顯示有現貨" },
-                  { value: "out-of-stock", label: "無現貨 (不顯示/圖片置灰)" },
-                  { value: "always-stock", label: "長期充足 (無限量供應)" }
-                ].map(opt => (
-                  <label key={opt.value} className="flex items-center gap-2.5 px-3 py-2 border border-slate-100 hover:bg-slate-50 rounded-xl cursor-pointer transition-all">
-                    <input
-                      type="radio"
-                      name="stockFilter"
-                      checked={stockFilter === opt.value}
-                      onChange={() => { setStockFilter(opt.value); setCurrentPage(1); }}
-                      className="text-slate-900 focus:ring-slate-900 h-4 w-4 border-slate-300"
-                    />
-                    <span className="text-xs text-slate-700 font-medium">{opt.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            {/* Folder Storage Explorer Disk Card */}
-            <div 
-              onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
-              onDragLeave={() => setIsDragOver(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDragOver(false);
-                if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-                  addFilesToQueue(Array.from(e.dataTransfer.files));
-                  setIsUploadOpen(true);
-                }
-              }}
-              className={`bg-gradient-to-br from-amber-50 to-orange-50/50 rounded-2xl border ${isDragOver ? "border-amber-400 ring-2 ring-amber-350" : "border-amber-100 hover:border-amber-200"} p-5 shadow-sm space-y-4 transition-all relative overflow-hidden group`}
-            >
-              {/* Backlight / Folder Accent effect */}
-              <div className="absolute top-0 right-0 w-24 h-24 bg-amber-200/20 rounded-full blur-xl -mr-6 -mt-6"></div>
-              
-              <div className="flex items-start justify-between relative z-10">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-600 flex items-center justify-center shadow-inner">
-                    <Folder className="w-5 h-5 text-amber-600 fill-amber-100" />
-                  </div>
-                  <div>
-                    <h4 className="font-extrabold text-xs text-amber-900 group-hover:text-amber-950 transition-colors uppercase tracking-wider">
-                      包含圖片資源庫
-                    </h4>
-                    <p className="text-[10px] text-amber-705 font-medium font-mono text-amber-700">
-                      存儲路徑: /public
-                    </p>
-                  </div>
-                </div>
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-850 border border-amber-500/30 font-mono">
-                  {serverImages.length} 個文件
-                </span>
+            {/* Inventory Status - Dropdown Version */}
+            <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm space-y-3 relative">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
+                  <Database className="w-3.5 h-3.5 text-slate-400" />
+                  <span>庫存狀態</span>
+                </h3>
+                {stockFilter !== "all" && (
+                  <button
+                    onClick={() => {
+                      setStockFilter("all");
+                      setCurrentPage(1);
+                      setIsStockDropdownOpen(false);
+                    }}
+                    className="text-[11px] text-indigo-600 hover:text-indigo-900 font-bold transition-all"
+                  >
+                    重置
+                  </button>
+                )}
               </div>
 
-              <p className="text-[11px] text-amber-800 leading-relaxed font-medium relative z-10">
-                這是在伺服器磁碟上保存商品目錄圖片的資料夾。拖拽圖片至此，或直接打開資料夾查看管理器！
-              </p>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsStockDropdownOpen(!isStockDropdownOpen)}
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 border border-slate-200 hover:bg-slate-100/50 rounded-xl text-xs font-semibold text-slate-700 transition-all outline-none"
+                >
+                  <span className="truncate">
+                    {stockFilter === "all" && "顯示全部商品"}
+                    {stockFilter === "in-stock" && "僅顯示有現貨"}
+                    {stockFilter === "out-of-stock" && "無現貨 (不顯示/圖片置灰)"}
+                    {stockFilter === "always-stock" && "長期充足 (無限量供應)"}
+                  </span>
+                  <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isStockDropdownOpen ? "rotate-180" : ""}`} />
+                </button>
 
-              {/* Drag Drop Inner Indicator Line */}
-              <div 
-                className="border border-dashed border-amber-300/60 rounded-xl p-3 bg-white/60 hover:bg-white/90 text-center cursor-pointer transition-all z-10 relative shadow-sm"
-                onClick={() => setIsFolderExplorerOpen(true)}
-              >
-                <div className="flex items-center justify-center gap-1.5">
-                  <FolderOpen className="w-4 h-4 text-amber-600" />
-                  <span className="text-xs font-bold text-amber-900">打開資料夾管理器</span>
-                </div>
-                <p className="text-[9px] text-amber-600 mt-1">拖拽新相片至此卡片可直接上傳添加</p>
+                {isStockDropdownOpen && (
+                  <div className="absolute left-0 right-0 mt-1.5 bg-white border border-slate-150 rounded-xl shadow-lg z-50 py-1">
+                    {[
+                      { value: "all", label: "顯示全部商品" },
+                      { value: "in-stock", label: "僅顯示有現貨" },
+                      { value: "out-of-stock", label: "無現貨 (不顯示/圖片置灰)" },
+                      { value: "always-stock", label: "長期充足 (無限量供應)" }
+                    ].map(opt => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => {
+                          setStockFilter(opt.value);
+                          setCurrentPage(1);
+                          setIsStockDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3.5 py-2 text-xs font-medium hover:bg-slate-50 flex items-center justify-between ${stockFilter === opt.value ? "bg-slate-50 text-indigo-600 font-bold" : "text-slate-600"}`}
+                      >
+                        <span>{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2927,6 +3110,52 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Cost Category Dock at bottom center (floating buttons from Col F of Cost tab) */}
+      {viewMode === "customer" && Object.keys(costCategories.symbolToName || {}).length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-white/95 backdrop-blur-md border border-slate-200 shadow-xl p-3 rounded-2xl w-[92vw] sm:w-[500px] animate-slideUp">
+          <div className="flex flex-wrap gap-2 justify-center">
+            <button
+              onClick={() => {
+                setSelectedCostCategoryName("All");
+                setCurrentPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer hover:scale-[1.03] active:scale-[0.97] duration-150 ${
+                selectedCostCategoryName === "All"
+                  ? "bg-slate-900 text-white shadow-sm"
+                  : "bg-slate-50 hover:bg-slate-100 hover:text-slate-900 text-slate-600 border border-slate-200/50"
+              }`}
+            >
+              全部商品
+            </button>
+            {Object.entries(costCategories.symbolToName || {}).map(([symbol, name]) => {
+              const count = products.filter(p => p.costCategoryName === name).length;
+              if (count === 0) return null;
+              return (
+                <button
+                  key={symbol}
+                  onClick={() => {
+                    setSelectedCostCategoryName(name);
+                    setCurrentPage(1);
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer hover:scale-[1.03] active:scale-[0.97] duration-150 ${
+                    selectedCostCategoryName === name
+                      ? "bg-indigo-600 text-white shadow-sm"
+                      : "bg-slate-50 hover:bg-slate-100 hover:text-slate-900 text-slate-600 border border-slate-200/50"
+                  }`}
+                >
+                  <span>{name}</span>
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-mono ${
+                    selectedCostCategoryName === name ? "bg-indigo-500 text-indigo-50" : "bg-slate-200/60 text-slate-500"
+                  }`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}

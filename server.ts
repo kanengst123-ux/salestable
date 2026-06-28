@@ -205,6 +205,77 @@ async function fetchProductsFromSheet() {
   }
 }
 
+let costCategoriesCache: {
+  symbolToName: Record<string, string>;
+  productIdToSymbol: Record<string, string>;
+} | null = null;
+let lastCostFetchTime = 0;
+
+async function fetchCostCategories() {
+  const now = Date.now();
+  if (costCategoriesCache && (now - lastCostFetchTime) < CACHE_DURATION) {
+    return costCategoriesCache;
+  }
+
+  const url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=0";
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Google Sheet Cost Tab: ${response.statusText}`);
+    }
+    const csvText = await response.text();
+    const rows = parseCSV(csvText);
+
+    const symbolToName: Record<string, string> = {};
+    const productIdToSymbol: Record<string, string> = {};
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+
+      const prodId = (row[0] || "").replace(/\r/g, "").trim();
+      const catSymbol = (row[1] || "").replace(/\r/g, "").trim();
+
+      if (prodId && catSymbol) {
+        productIdToSymbol[prodId] = catSymbol;
+      }
+
+      const mapSymbol = (row[4] || "").replace(/\r/g, "").trim();
+      const mapName = (row[5] || "").replace(/\r/g, "").trim();
+
+      if (mapSymbol && mapName) {
+        symbolToName[mapSymbol] = mapName;
+      }
+    }
+
+    costCategoriesCache = { symbolToName, productIdToSymbol };
+    lastCostFetchTime = now;
+
+    try {
+      fs.writeFileSync("cost_categories_backup.json", JSON.stringify(costCategoriesCache, null, 2));
+    } catch (e) {
+      console.error("Failed to write cost categories backup:", e);
+    }
+
+    return costCategoriesCache;
+  } catch (error) {
+    console.error("Error fetching cost categories from Google Sheets, attempting backup:", error);
+    if (costCategoriesCache) {
+      return costCategoriesCache;
+    }
+    try {
+      if (fs.existsSync("cost_categories_backup.json")) {
+        const backupData = fs.readFileSync("cost_categories_backup.json", "utf-8");
+        costCategoriesCache = JSON.parse(backupData);
+        return costCategoriesCache!;
+      }
+    } catch (backupError) {
+      console.error("No valid cost categories backup found:", backupError);
+    }
+    return { symbolToName: {}, productIdToSymbol: {} };
+  }
+}
+
 // Local products persistence helpers
 const LOCAL_PRODUCTS_FILE = path.join(process.cwd(), "local_products.json");
 
@@ -485,18 +556,38 @@ app.get("/api/products", async (req, res) => {
     const forceRefresh = req.query.refresh === "true";
     if (forceRefresh) {
       lastFetchTime = 0; // invalidate memory sheet cache duration lookup
+      lastCostFetchTime = 0; // invalidate memory cost cache duration lookup
     }
     const sheetProducts = await fetchProductsFromSheet();
     const localProducts = getLocalProducts();
     
+    let costCategories = { symbolToName: {} as Record<string, string>, productIdToSymbol: {} as Record<string, string> };
+    try {
+      costCategories = await fetchCostCategories();
+    } catch (e) {
+      console.error("Failed to fetch cost categories:", e);
+    }
+    
     // Prevent duplicate entries: override any fetched sheet product with its local edited counterpart
     const localIds = new Set(localProducts.map(p => p.id));
     const filteredSheet = sheetProducts.filter(p => !localIds.has(p.id));
+    const allRawProducts = [...localProducts, ...filteredSheet];
+
+    // Decorate products with cost tab category symbol and name
+    const decoratedProducts = allRawProducts.map((p: any) => {
+      const symbol = (costCategories.productIdToSymbol || {})[p.id] || "";
+      const name = (costCategories.symbolToName || {})[symbol] || "";
+      return {
+        ...p,
+        costCategorySymbol: symbol,
+        costCategoryName: name
+      };
+    });
     
-    res.json({ products: [...localProducts, ...filteredSheet] });
+    res.json({ products: decoratedProducts, costCategories });
   } catch (error) {
     console.error("Get products error:", error);
-    res.json({ products: getLocalProducts() });
+    res.json({ products: getLocalProducts(), costCategories: { symbolToName: {}, productIdToSymbol: {} } });
   }
 });
 
