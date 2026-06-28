@@ -38,6 +38,9 @@ interface Product {
   id: string;
   name: string;
   price: string;
+  priceA?: string;
+  priceB?: string;
+  priceC?: string;
   hasStock: boolean;
   alwaysStock: boolean;
   secondaryStockCount: string;
@@ -232,10 +235,33 @@ const ProductImage: React.FC<{
 
 export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
+  const [selectedPriceTier, setSelectedPriceTier] = useState<"A" | "B" | "C">(() => {
+    try {
+      const saved = localStorage.getItem("selected_price_tier");
+      return (saved === "A" || saved === "B" || saved === "C" ? saved : "A");
+    } catch {
+      return "A";
+    }
+  });
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [syncTime, setSyncTime] = useState<string>("");
   const [syncing, setSyncing] = useState<boolean>(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("selected_price_tier", selectedPriceTier);
+    } catch (e) {
+      console.warn("Storage access not allowed in this environment:", e);
+    }
+  }, [selectedPriceTier]);
+
+  const getProductPrice = (product: Product): string => {
+    if (selectedPriceTier === "A") return product.priceA || product.price;
+    if (selectedPriceTier === "B") return product.priceB || product.price;
+    if (selectedPriceTier === "C") return product.priceC || product.price;
+    return product.price;
+  };
 
   // View mode and google sheets integration states
   const [viewMode, setViewMode] = useState<"admin" | "customer">(() => {
@@ -847,8 +873,8 @@ export default function App() {
 
     // 4. Sorting
     result.sort((a, b) => {
-      const priceA = parseFloat(a.price) || 0;
-      const priceB = parseFloat(b.price) || 0;
+      const priceA = parseFloat(getProductPrice(a)) || 0;
+      const priceB = parseFloat(getProductPrice(b)) || 0;
 
       switch (sortKey) {
         case "name-asc":
@@ -868,7 +894,7 @@ export default function App() {
     });
 
     return result;
-  }, [products, searchQuery, selectedParentCategory, selectedSubCategory, stockFilter, sortKey, selectedCostCategoryName]);
+  }, [products, searchQuery, selectedParentCategory, selectedSubCategory, stockFilter, sortKey, selectedCostCategoryName, selectedPriceTier]);
 
   // Page Calculations
   const totalPages = 1;
@@ -926,7 +952,7 @@ export default function App() {
     txt += "===================================\n";
     let totalValue = 0;
     cart.forEach((item, idx) => {
-      const price = parseFloat(item.product.price) || 0;
+      const price = parseFloat(getProductPrice(item.product)) || 0;
       const subtotal = price * item.quantity;
       totalValue += subtotal;
       txt += `${idx + 1}. [${item.product.id}]\n`;
@@ -941,7 +967,7 @@ export default function App() {
     txt += `Generated on: ${new Date().toLocaleString()}\n`;
     txt += `Please confirm stock availability and final quotation. Thank you!`;
     return txt;
-  }, [cart]);
+  }, [cart, selectedPriceTier]);
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(compileQuoteText);
@@ -952,10 +978,10 @@ export default function App() {
 
   const totalCartPrice = useMemo(() => {
     return cart.reduce((total, item) => {
-      const price = parseFloat(item.product.price) || 0;
+      const price = parseFloat(getProductPrice(item.product)) || 0;
       return total + (price * item.quantity);
     }, 0);
-  }, [cart]);
+  }, [cart, selectedPriceTier]);
 
   const totalCartCount = useMemo(() => {
     return cart.reduce((total, item) => total + item.quantity, 0);
@@ -1287,10 +1313,28 @@ export default function App() {
                   <Package className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <h1 className="font-bold text-base text-slate-900 tracking-tight flex items-center gap-1.5 leading-none md:text-lg">
-                    產品目錄
-                  </h1>
-                  <div className="flex items-center gap-2 mt-1">
+                  <div className="flex items-center gap-2.5">
+                    <h1 className="font-bold text-base text-slate-900 tracking-tight leading-none md:text-lg">
+                      產品目錄
+                    </h1>
+                    {/* Compact Circle ABC Price Tier Selector */}
+                    <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-full border border-slate-200">
+                      {(["A", "B", "C"] as const).map(tier => (
+                        <button
+                          key={tier}
+                          onClick={() => setSelectedPriceTier(tier)}
+                          className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-black transition-all duration-150 cursor-pointer ${
+                            selectedPriceTier === tier
+                              ? "bg-slate-950 text-white shadow-sm"
+                              : "text-slate-500 hover:bg-slate-200 hover:text-slate-950"
+                          }`}
+                        >
+                          {tier}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1.5">
                     <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1 animate-pulse"></span>
                       表格實時連接
@@ -1716,8 +1760,15 @@ export default function App() {
                           <div className="flex flex-col">
                             <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">售價</span>
                             <span className="font-extrabold text-slate-900 text-sm md:text-base">
-                              {parseFloat(product.price) > 0 ? (
-                                <span>HK${parseFloat(product.price).toFixed(2)}</span>
+                              {parseFloat(getProductPrice(product)) > 0 ? (
+                                <span className="flex items-center gap-1.5">
+                                  <span>HK${parseFloat(getProductPrice(product)).toFixed(2)}</span>
+                                  {selectedPriceTier && (
+                                    <span className="text-[9px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-1 py-0.2">
+                                      {selectedPriceTier}
+                                    </span>
+                                  )}
+                                </span>
                               ) : (
                                 <span className="text-[11px] font-black text-rose-500 bg-rose-50 px-1 py-0.5 rounded">價格由詢價決定</span>
                               )}
@@ -1975,8 +2026,15 @@ export default function App() {
                       <div>
                         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">售價</span>
                         <span className="text-2xl font-black text-slate-900">
-                          {parseFloat(selectedProduct.price) > 0 ? (
-                            <span>HK${parseFloat(selectedProduct.price).toFixed(2)}</span>
+                          {parseFloat(getProductPrice(selectedProduct)) > 0 ? (
+                            <span className="flex items-center gap-2">
+                              <span>HK${parseFloat(getProductPrice(selectedProduct)).toFixed(2)}</span>
+                              {selectedPriceTier && (
+                                <span className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-150 rounded-lg px-2 py-0.5">
+                                  價格 {selectedPriceTier}
+                                </span>
+                              )}
+                            </span>
                           ) : (
                             <span className="text-sm font-bold text-rose-600 py-1 inline-block">歡迎查詢價格 (HK$ 0.00 / 歡迎查詢)</span>
                           )}
@@ -2117,7 +2175,7 @@ export default function App() {
                 <div className="space-y-4">
                   
                   {cart.map(item => {
-                    const price = parseFloat(item.product.price) || 0;
+                    const price = parseFloat(getProductPrice(item.product)) || 0;
                     const subtotal = price * item.quantity;
                     
                     return (

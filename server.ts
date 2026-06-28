@@ -8,7 +8,7 @@ import fs from "fs";
 import { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
 // Google Cloud Storage S3 Compatible HMAC configuration
 const bucketName = process.env.GCS_BUCKET_NAME || "my-product-catalog-images";
@@ -126,6 +126,9 @@ async function fetchProductsFromSheet() {
       const prodId = row[1] || `PROD-${index + 1}`;
       const name = row[2] || "Unnamed Product";
       const price = row[14] || "0.00";
+      const priceA = (row[17] || "").trim() || price;
+      const priceB = (row[18] || "").trim() || price;
+      const priceC = (row[19] || "").trim() || price;
       const abVal = (row[27] || "").trim();
       const acVal = (row[28] || "").trim();
 
@@ -149,6 +152,9 @@ async function fetchProductsFromSheet() {
         id: prodId,
         name,
         price,
+        priceA,
+        priceB,
+        priceC,
         hasStock,
         alwaysStock,
         secondaryStockCount: acVal,
