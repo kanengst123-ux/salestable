@@ -70,11 +70,18 @@ self.addEventListener('fetch', (event) => {
 
   // 2. Handle Image Requests (Cache-First, update on network)
   const isImage = 
+    request.destination === 'image' ||
     url.pathname.endsWith('.jpg') || 
     url.pathname.endsWith('.jpeg') || 
     url.pathname.endsWith('.png') || 
+    url.pathname.endsWith('.gif') || 
+    url.pathname.endsWith('.webp') || 
     url.pathname.endsWith('.svg') || 
-    url.pathname.startsWith('/api/uploaded-images/');
+    url.pathname.startsWith('/api/uploaded-images/') ||
+    url.hostname.includes('googleusercontent.com') ||
+    url.hostname.includes('drive.google.com') ||
+    url.hostname.includes('imgur.com') ||
+    url.search.includes('export=download');
 
   if (isImage) {
     event.respondWith(
@@ -83,7 +90,8 @@ self.addEventListener('fetch', (event) => {
           return cachedResponse;
         }
         return fetch(request).then((networkResponse) => {
-          if (networkResponse.ok) {
+          // Allow caching of successful responses (status 200) or opaque cross-origin responses (status 0)
+          if (networkResponse.ok || networkResponse.status === 200 || networkResponse.status === 0) {
             const copy = networkResponse.clone();
             caches.open(IMAGE_CACHE_NAME).then((cache) => {
               cache.put(request, copy);

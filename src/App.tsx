@@ -31,7 +31,10 @@ import {
   Database,
   Save,
   Activity,
-  Eye
+  Eye,
+  Share,
+  Smartphone,
+  Settings
 } from "lucide-react";
 
 interface Product {
@@ -137,10 +140,21 @@ const ProductImage: React.FC<{
           const cache = await caches.open("product-images-v1");
           const matched = await cache.match(imgSrc);
           if (matched && active) {
-            const blob = await matched.blob();
-            if (active) {
-              objectUrl = URL.createObjectURL(blob);
-              setCachedUrl(objectUrl);
+            // Opaque responses can't be read as blob, so serve them directly from cache via image source URL
+            if (matched.type === "opaque") {
+              setCachedUrl(imgSrc);
+              return;
+            }
+            try {
+              const blob = await matched.blob();
+              if (active) {
+                objectUrl = URL.createObjectURL(blob);
+                setCachedUrl(objectUrl);
+                return;
+              }
+            } catch (blobErr) {
+              // Fallback to setting directly, which lets Service Worker handle it offline
+              setCachedUrl(imgSrc);
               return;
             }
           }
@@ -264,6 +278,32 @@ export default function App() {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
     };
+  }, []);
+
+  // iOS PWA Installation Prompt State
+  const [showIosPrompt, setShowIosPrompt] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // Check if the device is iOS (iPhone/iPad/iPod)
+    const isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+    // Check if running in standalone display mode (already installed)
+    const isPWAStandalone = window.matchMedia('(display-mode: standalone)').matches || 
+      (navigator as any).standalone === true;
+
+    // Check if user dismissed the prompt in this browser before
+    const isDismissed = localStorage.getItem("ios_install_prompt_dismissed") === "true";
+
+    if (isIOSDevice && !isPWAStandalone && !isDismissed) {
+      // Show the beautifully styled iOS install prompt after a short delay
+      const timer = setTimeout(() => {
+        setShowIosPrompt(true);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
   }, []);
 
 
@@ -1087,7 +1127,7 @@ export default function App() {
               {/* Logo & Connected Title */}
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center shadow-lg shadow-slate-200">
-                  <Sliders className="w-5 h-5 text-white" />
+                  <Settings className="w-5 h-5 text-white animate-spin-slow" style={{ animationDuration: '12s' }} />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
@@ -1533,11 +1573,11 @@ export default function App() {
                 {/* Back to Management dashboard */}
                 <button
                   onClick={() => setViewMode("admin")}
-                  className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-all flex items-center gap-1.5 font-bold text-xs cursor-pointer"
-                  title="返回管理後台"
+                  className="p-2.5 rounded-xl border border-indigo-200 bg-indigo-50/70 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-900 transition-all flex items-center gap-1.5 font-bold text-xs cursor-pointer shrink-0"
+                  title="後台管理 (⚙️)"
                 >
-                  <Sliders className="w-4 h-4 text-indigo-600" />
-                  <span className="hidden sm:inline">返回後台</span>
+                  <Settings className="w-4 h-4 text-indigo-600 animate-spin" style={{ animationDuration: '6s' }} />
+                  <span>後台管理 ⚙️</span>
                 </button>
 
                 {/* Inquiry Trigger Drawer button */}
@@ -3312,7 +3352,585 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          const appsScriptCode = `function doPost(e) {\n  try {\n    var params = JSON.parse(e.postData.contents);\n    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Products") || SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];\n    var data = sheet.getDataRange().getValues();\n    \n    var productId = params.id;\n    var name = params.name;\n    var price = params.price;\n    var quantity = params.quantity;\n    var remarks = params.remarks;\n    \n    var foundIndex = -1;\n    for (var i = 1; i < data.length; i++) {\n      if (data[i][1] == productId) {\n        foundIndex = i;\n        break;\n      }\n    }\n    \n    var rowToUpdate = foundIndex !== -1 ? foundIndex + 1 : sheet.getLastRow() + 1;\n    \n    sheet.getRange(rowToUpdate, 2).setValue(productId);\n    sheet.getRange(rowToUpdate, 3).setValue(name);\n    sheet.getRange(rowToUpdate, 15).setValue(price);\n    \n    var abVal = (quantity === "" || quantity === undefined) ? 1 : 0;\n    var acVal = abVal === 1 ? "" : (quantity || "0");\n    sheet.getRange(rowToUpdate, 28).setValue(abVal);\n    sheet.getRange(rowToUpdate, 29).setValue(acVal);\n    sheet.getRange(rowToUpdate, 30).setValue(remarks || "");\n    \n    return ContentService.createTextOutput(JSON.stringify({ success: true, message: "Sheet updated row " + rowToUpdate }))\n      .setMimeType(ContentService.MimeType.JSON);\n  } catch (error) {\n    return ContentService.createTextOutput(JSON.stringify({ success: false, error: error.toString() }))\n      .setMimeType(ContentService.MimeType.JSON);\n  }\n}`;
+                          const appsScriptCode = `/**
+ * Google Apps Script Web App Template for Salestable.
+ * Fully compatible with your existing actions (addProduct, addCustomer, writeTradeLog, deleteOrder, etc.)
+ */
+
+function doPost(e) {
+  try {
+    var param = JSON.parse(e.postData.contents);
+    var action = param.action;
+    
+    // 1. Action: addProduct or updateProduct (Unified handler)
+    if (action === 'addProduct' || action === 'updateProduct' || (!action && param.id)) {
+      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('raw');
+      if (!sheet) {
+        sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+      }
+      
+      var name = param.name;
+      var id = param.id;
+      var price = param.price;
+      var quantity = param.quantity;
+      var remarks = param.remarks;
+      var username = param.username || "System";
+      
+      // Look if the product already exists in 'raw' by checking name or ID
+      var data = sheet.getDataRange().getValues();
+      var foundIndex = -1;
+      for (var i = 1; i < data.length; i++) {
+        var rowName = (data[i][2] || "").toString().trim();
+        var rowId = (data[i][1] || "").toString().trim(); // Col B (SKU / ID)
+        var rowIdColD = (data[i][3] || "").toString().trim(); // Col D
+        if ((name && rowName === name.toString().trim()) || 
+            (id && (rowId === id.toString().trim() || rowIdColD === id.toString().trim()))) {
+          foundIndex = i;
+          break;
+        }
+      }
+      
+      var rowToUpdate = foundIndex !== -1 ? foundIndex + 1 : sheet.getLastRow() + 1;
+      
+      if (foundIndex === -1) {
+        // Appending a new row with default structure
+        sheet.getRange(rowToUpdate, 1).setValue(new Date()); // Col A: Timestamp
+        sheet.getRange(rowToUpdate, 2).setValue(id || "");  // Col B: SKU / ID
+        sheet.getRange(rowToUpdate, 3).setValue(name || ""); // Col C: Product Name
+        sheet.getRange(rowToUpdate, 4).setValue(id || "");  // Col D: Metadata / SKU ID
+      } else {
+        sheet.getRange(rowToUpdate, 2).setValue(id || "");
+        sheet.getRange(rowToUpdate, 3).setValue(name || "");
+      }
+      
+      // Update Price in Col O (Col 15) and set client tier prices (Col R/S/T) if present
+      if (price !== undefined) {
+        var pNum = parseFloat(price.toString().replace(/[$,\\s]/g, '')) || 0;
+        sheet.getRange(rowToUpdate, 15).setValue(pNum); // Col O: Price
+        sheet.getRange(rowToUpdate, 18).setValue(pNum); // Col R: Gold Price
+        sheet.getRange(rowToUpdate, 19).setValue(pNum); // Col S: Silver Price
+        sheet.getRange(rowToUpdate, 20).setValue(pNum); // Col T: Basic Price
+      }
+      
+      var abVal = (quantity === "" || quantity === undefined) ? 1 : 0;
+      var acVal = abVal === 1 ? "" : (quantity || "0");
+      
+      sheet.getRange(rowToUpdate, 28).setValue(abVal); // Col AB: UnlimitedStock
+      sheet.getRange(rowToUpdate, 29).setValue(acVal); // Col AC: Stock / 庫存
+      sheet.getRange(rowToUpdate, 30).setValue(remarks || ""); // Col AD: Remarks
+      
+      return ContentService.createTextOutput(JSON.stringify({ 
+        status: 'success', 
+        message: 'Product synced successfully in row ' + rowToUpdate 
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // 2. Action: addCustomer
+    if (action === 'addCustomer') {
+      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('customer_cat') || 
+                  SpreadsheetApp.getActiveSpreadsheet().getSheetByName('顧客級數');
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'customer_cat or 顧客級數 sheet not found' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      var name = param.name;
+      var user = param.user;
+      var district = param.district;
+      var grade = param.grade;
+      
+      sheet.appendRow([name, user, grade, district]);
+      
+      return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'Customer added successfully' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // 3. Action: writeTradeLog (Supports INSERT and UPDATE)
+    if (action === 'writeTradeLog') {
+      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Trade_Log');
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'Trade_Log sheet not found' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      var rows = param.rows; // Array of arrays representing the rows
+      if (!rows || rows.length === 0) {
+        return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'No rows sent' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      // Ensure the sheet has enough columns to hold our 13-column wide schema
+      var maxCols = sheet.getMaxColumns();
+      var neededCols = Math.max(13, rows[0].length);
+      if (maxCols < neededCols) {
+        sheet.insertColumnsAfter(maxCols, neededCols - maxCols);
+      }
+
+      // Gather all unique Order IDs from Column M of the incoming rows (Index 12)
+      var incomingIds = {};
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        if (row.length >= 13) {
+          var orderId = row[12]; // Col M is index 12 (0-indexed)
+          if (orderId) {
+            incomingIds[orderId.toString().trim()] = true;
+          }
+        }
+      }
+
+      // Revert stock of previous matching rows in Trade_Log before applying new subtractions
+      revertStockForOrders(incomingIds);
+      
+      // Update stock quantities in the 'raw' sheet, Col AC
+      try {
+        var rawSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('raw');
+        if (!rawSheet) {
+          rawSheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+        }
+        if (rawSheet) {
+          var rawValues = rawSheet.getDataRange().getValues();
+          var rawHeaderRowIdx = 0;
+          var rawTitleIdx = 2; // Col C default
+          var rawUnlimitedIdx = 27; // Col AB default
+          var rawStockIdx = 28; // Col AC default
+          
+          for (var i = 0; i < Math.min(rawValues.length, 10); i++) {
+            var row = rawValues[i];
+            var foundIdx = -1;
+            for (var j = 0; j < row.length; j++) {
+              if (row[j] && row[j].toString().toLowerCase().trim() === 'title') {
+                foundIdx = j;
+                break;
+              }
+            }
+            if (foundIdx !== -1) {
+              rawHeaderRowIdx = i;
+              rawTitleIdx = foundIdx;
+              for (var j = 0; j < row.length; j++) {
+                var cellStr = (row[j] || '').toString().toLowerCase().trim();
+                var normed = cellStr.replace(/[\\s_-]/g, '');
+                if (normed.indexOf('unlimitedstock') !== -1) rawUnlimitedIdx = j;
+                else if (normed === 'stock' || cellStr.indexOf('庫存') !== -1) rawStockIdx = j;
+              }
+              break;
+            }
+          }
+
+          // Create index of product name to row index
+          var prodToIndex = {};
+          for (var rIdx = rawHeaderRowIdx + 1; rIdx < rawValues.length; rIdx++) {
+            var pName = rawValues[rIdx][rawTitleIdx];
+            if (pName && pName.toString().trim()) {
+              prodToIndex[pName.toString().trim()] = rIdx;
+            }
+          }
+
+          // Apply subtractions
+          for (var i = 0; i < rows.length; i++) {
+            var incomingRow = rows[i];
+            if (incomingRow.length < 6) continue;
+            var incomingProdName = (incomingRow[1] || '').toString().trim();
+            var colD = incomingRow[3];
+            var colF = incomingRow[5];
+            
+            var soldQty = 0;
+            if (colD !== undefined && colF !== undefined) {
+              var parseVal = function(v) {
+                if (v === undefined || v === null || v === '') return 0;
+                if (typeof v === 'number') return v;
+                var parsed = parseFloat(v.toString().replace(/[$,\\s]/g, ''));
+                return isNaN(parsed) ? 0 : parsed;
+              };
+              soldQty = parseVal(colD) * parseVal(colF);
+            }
+
+            if (incomingProdName && soldQty > 0) {
+              var targetIndex = prodToIndex[incomingProdName];
+              if (targetIndex !== undefined) {
+                var rawRow = rawValues[targetIndex];
+                var isUnlimited = rawRow[rawUnlimitedIdx] !== undefined && rawRow[rawUnlimitedIdx] !== null && rawRow[rawUnlimitedIdx].toString().trim() === '1';
+                if (!isUnlimited) {
+                  var currentStockStr = rawRow[rawStockIdx];
+                  var currentStock = 0;
+                  if (currentStockStr !== undefined && currentStockStr !== null && currentStockStr.toString().trim() !== '') {
+                    var parsedStock = parseFloat(currentStockStr.toString().replace(/[$,\\s]/g, ''));
+                    if (!isNaN(parsedStock)) {
+                      currentStock = parsedStock;
+                    }
+                  }
+                  var newStock = currentStock - soldQty;
+                  rawValues[targetIndex][rawStockIdx] = newStock;
+                  rawSheet.getRange(targetIndex + 1, rawStockIdx + 1).setValue(newStock);
+                }
+              }
+            }
+          }
+        }
+      } catch (stockError) {
+        console.error('Error updating stock in raw sheet:', stockError);
+      }
+      
+      // Delete existing rows with these matching order IDs in Column M (13th column)
+      var uniqueIdsToDelete = Object.keys(incomingIds);
+      if (uniqueIdsToDelete.length > 0) {
+        var lastRow = sheet.getLastRow();
+        if (lastRow > 1) {
+          // Fetch Col M (Column 13) values (from row 2 to lastRow)
+          var colMValues = sheet.getRange(2, 13, lastRow - 1, 1).getValues();
+          
+          // Iterate backward to avoid row index shifting during deletion
+          for (var r = lastRow; r >= 2; r--) {
+            var cellValue = colMValues[r - 2][0];
+            if (cellValue && incomingIds[cellValue.toString().trim()]) {
+              sheet.deleteRow(r);
+            }
+          }
+        }
+      }
+      
+      // Append the new rows to the Trade_Log sheet
+      sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+      
+      return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'Trade log written/edited successfully' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 3.5 Action: deleteOrder (Delete matching rows by Order ID in Column M)
+    if (action === 'deleteOrder') {
+      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Trade_Log');
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'Trade_Log sheet not found' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      var orderId = param.orderId;
+      if (!orderId) {
+        return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'No orderId provided' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+
+      // Revert stock for this order ID before deletion from Trade_Log
+      var deleteMap = {};
+      deleteMap[orderId.toString().trim()] = true;
+      revertStockForOrders(deleteMap);
+      
+      // Ensure the sheet has enough columns to hold our 13-column wide schema
+      var maxCols = sheet.getMaxColumns();
+      if (maxCols < 13) {
+        sheet.insertColumnsAfter(maxCols, 13 - maxCols);
+      }
+      
+      var lastRow = sheet.getLastRow();
+      var deletedCount = 0;
+      if (lastRow > 1) {
+        // Fetch Col M (Column 13) values (from row 2 onwards)
+        var colMValues = sheet.getRange(2, 13, lastRow - 1, 1).getValues();
+        
+        // Iterate backward to avoid row index shifting during deletion
+        for (var r = lastRow; r >= 2; r--) {
+          var cellValue = colMValues[r - 2][0];
+          if (cellValue && cellValue.toString().trim() === orderId.toString().trim()) {
+            sheet.deleteRow(r);
+            deletedCount++;
+          }
+        }
+      }
+      
+      return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'Deleted ' + deletedCount + ' rows for order ID ' + orderId }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 4. Action: updateGrades or Fallback to update grades (when body is raw dictionary of { name: grade })
+    if (action === 'updateGrades' || (!action && Object.keys(param).length > 0)) {
+      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('customer_cat') ||
+                  SpreadsheetApp.getActiveSpreadsheet().getSheetByName('顧客級數');
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'customer_cat or 顧客級數 sheet not found' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      var gradesToUpdate = action === 'updateGrades' ? param.grades : param;
+      var lastRow = sheet.getLastRow();
+      if (lastRow > 1) {
+        // Fetch Col A (Customer Name) values (from row 2 onwards)
+        var nameValues = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+        var gradeRange = sheet.getRange(2, 3, lastRow - 1, 1);
+        var gradeValues = gradeRange.getValues();
+        
+        var updatedCount = 0;
+        for (var idx = 0; idx < nameValues.length; idx++) {
+          var nameCell = nameValues[idx][0];
+          if (nameCell) {
+            var trimmedName = nameCell.toString().trim();
+            if (gradesToUpdate[trimmedName] !== undefined) {
+              gradeValues[idx][0] = gradesToUpdate[trimmedName];
+              updatedCount++;
+            }
+          }
+        }
+        
+        if (updatedCount > 0) {
+          gradeRange.setValues(gradeValues);
+        }
+        
+        return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'Updated ' + updatedCount + ' customer grades successfully' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'No rows to update' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'Unknown action: ' + action }))
+      .setMimeType(ContentService.MimeType.JSON);
+      
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: error.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  try {
+    var action = e.parameter.action;
+    
+    // 1. Action: getCustomers
+    if (action === 'getCustomers') {
+      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('customer_cat') ||
+                  SpreadsheetApp.getActiveSpreadsheet().getSheetByName('顧客級數');
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'customer_cat or 顧客級數 sheet not found' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      var lastRow = sheet.getLastRow();
+      if (lastRow < 2) {
+        return ContentService.createTextOutput(JSON.stringify([]))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      var values = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+      var customers = [];
+      for (var i = 0; i < values.length; i++) {
+        var row = values[i];
+        if (row[0]) {
+          customers.push({
+            name: row[0].toString().trim(),
+            sales: (row[1] || '').toString().trim(),
+            grade: (row[2] || 'C').toString().trim(),
+            district: (row[3] || '').toString().trim()
+          });
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify(customers))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // 2. Action: getProducts (100% live uncached product fetch)
+    if (action === 'getProducts') {
+      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('raw');
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'raw sheet not found' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      var lastRow = sheet.getLastRow();
+      if (lastRow < 1) {
+        return ContentService.createTextOutput(JSON.stringify([]))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      var values = sheet.getDataRange().getValues();
+      var headerRowIdx = 0;
+      var titleIdx = 2; // Col C (index 2) is the item title
+      var goldIdx = 17; // Col R
+      var silverIdx = 18; // Col S
+      var basicIdx = 19; // Col T
+      var priceIdx = 14; // Col O
+      var discountedPriceIdx = 15; // Col P
+      var unlimitedIdx = 27; // Col AB
+      var stockIdx = 28; // Col AC
+      
+      // Attempt to locate title row and other index headers dynamically
+      for (var i = 0; i < Math.min(values.length, 10); i++) {
+        var row = values[i];
+        var foundIdx = -1;
+        for (var j = 0; j < row.length; j++) {
+          if (row[j] && row[j].toString().toLowerCase().trim() === 'title') {
+            foundIdx = j;
+            break;
+          }
+        }
+        if (foundIdx !== -1) {
+          headerRowIdx = i;
+          titleIdx = foundIdx;
+          
+          for (var j = 0; j < row.length; j++) {
+            var cellStr = (row[j] || '').toString().toLowerCase().trim();
+            var normed = cellStr.replace(/[\\s_-]/g, '');
+            if (cellStr.indexOf('gold') !== -1) goldIdx = j;
+            else if (cellStr.indexOf('silver') !== -1) silverIdx = j;
+            else if (cellStr.indexOf('basic') !== -1) basicIdx = j;
+            else if (normed === 'price') priceIdx = j;
+            else if (normed === 'discountedprice') discountedPriceIdx = j;
+            else if (normed.indexOf('unlimitedstock') !== -1) unlimitedIdx = j;
+            else if (normed === 'stock' || cellStr.indexOf('庫存') !== -1) stockIdx = j;
+          }
+          break;
+        }
+      }
+      
+      var parseNum = function(val) {
+        if (val === undefined || val === null || val === '') return 0;
+        if (typeof val === 'number') return val;
+        var cleaned = val.toString().replace(/[$,\\s]/g, '');
+        var parsed = parseFloat(cleaned);
+        return isNaN(parsed) ? 0 : parsed;
+      };
+      
+      var productsMap = {};
+      var productsList = [];
+      
+      for (var rowIdx = headerRowIdx + 1; rowIdx < values.length; rowIdx++) {
+        var row = values[rowIdx];
+        var productName = row[titleIdx];
+        if (productName && productName.toString().trim()) {
+          var trimmed = productName.toString().trim();
+          if (trimmed.toLowerCase() === 'title') continue;
+          if (trimmed.length > 1) {
+            
+            var getPrice = function(colIdx) {
+              var val = row[colIdx];
+              if (val !== undefined && val !== null && val.toString().trim() !== '') return parseNum(val);
+              var discounted = row[discountedPriceIdx];
+              if (discounted !== undefined && discounted !== null && discounted.toString().trim() !== '') return parseNum(discounted);
+              return parseNum(row[priceIdx]);
+            };
+            
+            if (!productsMap[trimmed]) {
+              productsMap[trimmed] = true;
+              var isUnlimited = row[unlimitedIdx] !== undefined && row[unlimitedIdx] !== null && row[unlimitedIdx].toString().trim() === '1';
+              var stockVal = undefined;
+              if (row[stockIdx] !== undefined && row[stockIdx] !== null && row[stockIdx].toString().trim() !== '') {
+                stockVal = parseNum(row[stockIdx]);
+              }
+              productsList.push({
+                name: trimmed,
+                prices: {
+                  A: getPrice(goldIdx),
+                  B: getPrice(silverIdx),
+                  C: getPrice(basicIdx)
+                },
+                unlimitedStock: isUnlimited,
+                stock: stockVal
+              });
+            }
+          }
+        }
+      }
+      
+      return ContentService.createTextOutput(JSON.stringify(productsList))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    return ContentService.createTextOutput("Google Apps Script Web App is active and listening.");
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: error.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function revertStockForOrders(orderIdsMap) {
+  try {
+    var rawSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('raw');
+    if (!rawSheet) {
+      rawSheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+    }
+    var tradeLogSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Trade_Log');
+    if (rawSheet && tradeLogSheet) {
+      var rawValues = rawSheet.getDataRange().getValues();
+      var rawHeaderRowIdx = 0;
+      var rawTitleIdx = 2; // Col C default
+      var rawUnlimitedIdx = 27; // Col AB default
+      var rawStockIdx = 28; // Col AC default
+      
+      for (var i = 0; i < Math.min(rawValues.length, 10); i++) {
+        var row = rawValues[i];
+        var foundIdx = -1;
+        for (var j = 0; j < row.length; j++) {
+          if (row[j] && row[j].toString().toLowerCase().trim() === 'title') {
+            foundIdx = j;
+            break;
+          }
+        }
+        if (foundIdx !== -1) {
+          rawHeaderRowIdx = i;
+          rawTitleIdx = foundIdx;
+          for (var j = 0; j < row.length; j++) {
+            var cellStr = (row[j] || '').toString().toLowerCase().trim();
+            var normed = cellStr.replace(/[\\s_-]/g, '');
+            if (normed.indexOf('unlimitedstock') !== -1) rawUnlimitedIdx = j;
+            else if (normed === 'stock' || cellStr.indexOf('庫存') !== -1) rawStockIdx = j;
+          }
+          break;
+        }
+      }
+
+      // Create index of product name to row index
+      var prodToIndex = {};
+      for (var rIdx = rawHeaderRowIdx + 1; rIdx < rawValues.length; rIdx++) {
+        var pName = rawValues[rIdx][rawTitleIdx];
+        if (pName && pName.toString().trim()) {
+          prodToIndex[pName.toString().trim()] = rIdx;
+        }
+      }
+
+      var lastRow = tradeLogSheet.getLastRow();
+      if (lastRow > 1) {
+        var tradeLogValues = tradeLogSheet.getRange(1, 1, lastRow, 13).getValues();
+        for (var r = 1; r < lastRow; r++) {
+          var logRow = tradeLogValues[r];
+          if (logRow.length < 13) continue;
+          var orderId = (logRow[12] || '').toString().trim();
+          if (orderId && orderIdsMap[orderId]) {
+            var prodName = (logRow[1] || '').toString().trim();
+            var colD = logRow[3];
+            var colF = logRow[5];
+            
+            var parseVal = function(v) {
+              if (v === undefined || v === null || v === '') return 0;
+              if (typeof v === 'number') return v;
+              var parsed = parseFloat(v.toString().replace(/[$,\\s]/g, ''));
+              return isNaN(parsed) ? 0 : parsed;
+            };
+            var revertQty = parseVal(colD) * parseVal(colF);
+            
+            if (prodName && revertQty > 0) {
+              var targetIndex = prodToIndex[prodName];
+              if (targetIndex !== undefined) {
+                var rawRow = rawValues[targetIndex];
+                var isUnlimited = rawRow[rawUnlimitedIdx] !== undefined && rawRow[rawUnlimitedIdx] !== null && rawRow[rawUnlimitedIdx].toString().trim() === '1';
+                if (!isUnlimited) {
+                  var currentStockStr = rawRow[rawStockIdx];
+                  var currentStock = 0;
+                  if (currentStockStr !== undefined && currentStockStr !== null && currentStockStr.toString().trim() !== '') {
+                    var parsedStock = parseFloat(currentStockStr.toString().replace(/[$,\\s]/g, ''));
+                    if (!isNaN(parsedStock)) {
+                      currentStock = parsedStock;
+                    }
+                  }
+                  var newStock = currentStock + revertQty;
+                  rawValues[targetIndex][rawStockIdx] = newStock;
+                  rawSheet.getRange(targetIndex + 1, rawStockIdx + 1).setValue(newStock);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error in reverting stock:', err);
+  }
+}`;
                           navigator.clipboard.writeText(appsScriptCode);
                           showToast("試算表 Apps Script 代碼已複製到剪貼簿！");
                         }}
@@ -3392,6 +4010,56 @@ export default function App() {
                 </button>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* iOS Safari PWA Install Prompt Guide */}
+      {showIosPrompt && (
+        <div className="fixed bottom-4 left-4 right-4 md:left-auto md:right-6 md:w-96 bg-white border border-slate-200/85 shadow-2xl rounded-2xl p-4 z-50 animate-slideUp">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-slate-900 flex items-center justify-center text-white shrink-0 shadow-md">
+                <Smartphone className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-xs tracking-tight">將 SalesTable 安裝到 iPhone / iPad</h3>
+                <p className="text-[10px] text-slate-500 font-medium">享受全螢幕、離線使用與極速載入體驗</p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                localStorage.setItem("ios_install_prompt_dismissed", "true");
+                setShowIosPrompt(false);
+              }}
+              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors cursor-pointer"
+              title="關閉提示"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="mt-3.5 space-y-2 border-t border-slate-100 pt-3">
+            <div className="flex items-start gap-2.5 text-xs">
+              <span className="flex items-center justify-center w-5 h-5 rounded-full bg-slate-100 font-bold text-[10px] text-slate-700 shrink-0 mt-0.5">1</span>
+              <div className="text-slate-600 font-medium leading-normal">
+                請在 Safari 瀏覽器中，點擊下方的「<strong>分享</strong>」按鈕
+                <div className="inline-flex items-center justify-center mx-1 bg-slate-100 border border-slate-200 rounded p-1 text-slate-700">
+                  <Share className="w-3.5 h-3.5" />
+                </div>
+              </div>
+            </div>
+            <div className="flex items-start gap-2.5 text-xs">
+              <span className="flex items-center justify-center w-5 h-5 rounded-full bg-slate-100 font-bold text-[10px] text-slate-700 shrink-0 mt-0.5">2</span>
+              <p className="text-slate-600 font-medium leading-normal">
+                向上滑動選單，點擊「<strong>加入主畫面</strong>」
+                <span className="inline-block px-1.5 py-0.5 ml-1 bg-indigo-50 border border-indigo-100 rounded text-[10px] text-indigo-600 font-bold">Add to Home Screen</span>
+              </p>
+            </div>
+          </div>
+          
+          <div className="mt-3 text-[10px] text-center text-slate-400 font-medium border-t border-slate-50 pt-2 flex items-center justify-center gap-1">
+            <span>✨ 像原生 App 一樣流暢，支援完全離線瀏覽</span>
           </div>
         </div>
       )}

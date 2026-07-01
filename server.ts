@@ -326,16 +326,16 @@ function saveSheetSettings(settings: any) {
   }
 }
 
-async function triggerSheetsSync(id: string, name: string, price: string, quantity: string, remarks: string) {
+async function triggerSheetsSync(id: string, name: string, price: string, quantity: string, remarks: string, action: string = "addProduct") {
   const settings = getSheetSettings();
   if (settings.enabled && settings.appsScriptUrl) {
     try {
-      console.log(`Forwarding update to Google Sheets Apps Script Web App for id: ${id}`);
+      console.log(`Forwarding update to Google Sheets Apps Script Web App for id: ${id}, action: ${action}`);
       // Use dynamic import for fetch if needed, but since NodeJS 18 has global fetch, we call it directly
       const response = await fetch(settings.appsScriptUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, name, price, quantity, remarks })
+        body: JSON.stringify({ action, id, name, price, quantity, remarks })
       });
       const responseText = await response.text();
       console.log("Apps Script response:", responseText);
@@ -463,7 +463,7 @@ app.post("/api/products", (req, res) => {
     saveLocalProducts(localProducts);
 
     // Sync to Google Sheet if enabled
-    triggerSheetsSync(finalId, name, price || "0", quantity, remarks || "");
+    triggerSheetsSync(finalId, name, price || "0", quantity, remarks || "", "addProduct");
 
     res.json({ success: true, product: newProduct });
   } catch (error: any) {
@@ -548,7 +548,7 @@ app.put("/api/products/:id", (req, res) => {
     saveLocalProducts(localProducts);
 
     // Sync to Google Sheet if enabled
-    triggerSheetsSync(id, name, price || "0", quantity, remarks || "");
+    triggerSheetsSync(id, name, price || "0", quantity, remarks || "", "updateProduct");
 
     res.json({ success: true, message: "Product updated successfully" });
   } catch (error: any) {
