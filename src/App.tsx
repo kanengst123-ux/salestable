@@ -247,6 +247,25 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [syncTime, setSyncTime] = useState<string>("");
   const [syncing, setSyncing] = useState<boolean>(false);
+  
+  // Offline monitoring states
+  const [isOffline, setIsOffline] = useState<boolean>(() => {
+    return typeof navigator !== "undefined" ? !navigator.onLine : false;
+  });
+  const [usingOfflineBackup, setUsingOfflineBackup] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
 
   useEffect(() => {
     try {
@@ -691,6 +710,19 @@ export default function App() {
           }
         }
         setProducts(uniqueProducts);
+        setUsingOfflineBackup(false);
+
+        // Cache in localStorage for offline availability
+        try {
+          localStorage.setItem("cached_products", JSON.stringify(uniqueProducts));
+          if (data.costCategories) {
+            localStorage.setItem("cached_cost_categories", JSON.stringify(data.costCategories));
+          }
+          localStorage.setItem("cached_sync_time", new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        } catch (e) {
+          console.warn("Storage write failed (offline caching skipped):", e);
+        }
+
         // Start pre-downloading and caching images to device in the background
         preloadAndCacheAllProducts(uniqueProducts);
         if (data.costCategories) {
@@ -701,7 +733,32 @@ export default function App() {
         throw new Error("Invalid format returned by server");
       }
     } catch (err: any) {
-      console.error(err);
+      console.warn("Fetching latest sheets products failed, attempting local cache fallback:", err);
+      try {
+        const cachedProductsStr = localStorage.getItem("cached_products");
+        const cachedCostStr = localStorage.getItem("cached_cost_categories");
+        const cachedSyncTimeStr = localStorage.getItem("cached_sync_time");
+
+        if (cachedProductsStr) {
+          const parsedProducts = JSON.parse(cachedProductsStr);
+          setProducts(parsedProducts);
+          setUsingOfflineBackup(true);
+          if (cachedCostStr) {
+            setCostCategories(JSON.parse(cachedCostStr));
+          }
+          if (cachedSyncTimeStr) {
+            setSyncTime(cachedSyncTimeStr + " (離線快照)");
+          } else {
+            setSyncTime("離線模式");
+          }
+          // Do not show full-screen error if we recovered successfully
+          setLoading(false);
+          setSyncing(false);
+          return;
+        }
+      } catch (fallbackErr) {
+        console.error("Local storage recovery failed:", fallbackErr);
+      }
       setError(err.message || "Something went wrong while fetching products.");
     } finally {
       setLoading(false);
@@ -722,9 +779,24 @@ export default function App() {
       .then(data => {
         if (data) {
           setSheetSettings(data);
+          try {
+            localStorage.setItem("cached_sheet_settings", JSON.stringify(data));
+          } catch (e) {
+            console.warn(e);
+          }
         }
       })
-      .catch(err => console.error(err));
+      .catch(err => {
+        console.warn("Sheet settings fetch failed, checking local cache", err);
+        try {
+          const cached = localStorage.getItem("cached_sheet_settings");
+          if (cached) {
+            setSheetSettings(JSON.parse(cached));
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      });
 
     // Load existing cart if stored
     try {
@@ -864,6 +936,15 @@ export default function App() {
       result = result.filter(p => !p.hasStock);
     } else if (stockFilter === "always-stock") {
       result = result.filter(p => p.alwaysStock);
+    } else if (stockFilter === "zero-stock") {
+      result = result.filter(p => {
+        if (p.allValues && p.allValues.length > 28) {
+          const ab = (p.allValues[27] || "").trim();
+          const ac = (p.allValues[28] || "").trim();
+          return ab === "0" && ac === "0";
+        }
+        return !p.alwaysStock && p.secondaryStockCount === "0";
+      });
     }
 
     // 3.5 Cost Category Filter (from Col F of Cost tab)
@@ -1009,9 +1090,16 @@ export default function App() {
                   <Sliders className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <h1 className="font-bold text-base text-slate-900 tracking-tight flex items-center gap-1.5 leading-none md:text-lg">
-                    Salestable
-                  </h1>
+                  <div className="flex items-center gap-2">
+                    <h1 className="font-bold text-base text-slate-900 tracking-tight leading-none md:text-lg">
+                      Salestable
+                    </h1>
+                    {syncTime && (
+                      <span className="text-[10px] font-bold text-slate-500 bg-slate-100 border border-slate-200 rounded-lg px-2 py-0.5" title="最後刷新時間">
+                        最後刷新: {syncTime}
+                      </span>
+                    )}
+                  </div>
                   <span className="text-[11px] text-indigo-650 font-bold block mt-1">
                     Google 表格實時同步
                   </span>
@@ -1036,22 +1124,94 @@ export default function App() {
           <main className="max-w-7xl mx-auto px-4 md:px-6 py-6 lg:py-8 space-y-6">
             {/* Quick Stats Summary row */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-fadeIn">
-              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs">
-                <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block">目錄商品總數</span>
-                <span className="text-2xl font-black text-slate-900 mt-1 block">{products.length}</span>
-              </div>
-              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs">
-                <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block">有現貨</span>
-                <span className="text-2xl font-black text-emerald-600 mt-1 block">{products.filter(p => p.hasStock).length}</span>
-              </div>
-              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs">
-                <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block">長期充足</span>
-                <span className="text-2xl font-black text-indigo-600 mt-1 block">{products.filter(p => p.alwaysStock).length}</span>
-              </div>
-              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-xs">
-                <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block">最後刷新時間</span>
-                <span className="text-xs text-slate-500 font-mono mt-2 block break-all">{syncTime || "同步快取數據"}</span>
-              </div>
+              {/* Card 1: 目錄商品總數 */}
+              <button
+                onClick={() => {
+                  setStockFilter("all");
+                  setCurrentPage(1);
+                }}
+                className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+                  stockFilter === "all"
+                    ? "bg-slate-900 text-white border-slate-900 shadow-md scale-[1.02]"
+                    : "bg-white text-slate-900 border-slate-100 hover:border-slate-300 hover:shadow-xs"
+                }`}
+              >
+                <span className={`text-[10px] uppercase tracking-wider font-bold block ${stockFilter === "all" ? "text-slate-300" : "text-slate-400"}`}>目錄商品總數</span>
+                <span className="text-2xl font-black mt-1 block">{products.length}</span>
+                <span className={`text-[10px] block mt-1.5 font-medium ${stockFilter === "all" ? "text-slate-400" : "text-slate-500"}`}>
+                  {stockFilter === "all" ? "✓ 正在篩選全部" : "點擊篩選全部"}
+                </span>
+              </button>
+
+              {/* Card 2: 有現貨 */}
+              <button
+                onClick={() => {
+                  setStockFilter("in-stock");
+                  setCurrentPage(1);
+                }}
+                className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+                  stockFilter === "in-stock"
+                    ? "bg-emerald-50 border-emerald-500 text-emerald-900 shadow-sm scale-[1.02]"
+                    : "bg-white text-slate-900 border-slate-100 hover:border-slate-300 hover:shadow-xs"
+                }`}
+              >
+                <span className={`text-[10px] uppercase tracking-wider font-bold block ${stockFilter === "in-stock" ? "text-emerald-600" : "text-slate-400"}`}>有現貨</span>
+                <span className={`text-2xl font-black mt-1 block ${stockFilter === "in-stock" ? "text-emerald-700" : "text-emerald-600"}`}>
+                  {products.filter(p => p.hasStock).length}
+                </span>
+                <span className={`text-[10px] block mt-1.5 font-medium ${stockFilter === "in-stock" ? "text-emerald-600" : "text-slate-500"}`}>
+                  {stockFilter === "in-stock" ? "✓ 正在篩選有現貨" : "點擊篩選有現貨"}
+                </span>
+              </button>
+
+              {/* Card 3: 長期充足 */}
+              <button
+                onClick={() => {
+                  setStockFilter("always-stock");
+                  setCurrentPage(1);
+                }}
+                className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+                  stockFilter === "always-stock"
+                    ? "bg-indigo-50 border-indigo-500 text-indigo-900 shadow-sm scale-[1.02]"
+                    : "bg-white text-slate-900 border-slate-100 hover:border-slate-300 hover:shadow-xs"
+                }`}
+              >
+                <span className={`text-[10px] uppercase tracking-wider font-bold block ${stockFilter === "always-stock" ? "text-indigo-600" : "text-slate-400"}`}>長期充足</span>
+                <span className={`text-2xl font-black mt-1 block ${stockFilter === "always-stock" ? "text-indigo-700" : "text-indigo-600"}`}>
+                  {products.filter(p => p.alwaysStock).length}
+                </span>
+                <span className={`text-[10px] block mt-1.5 font-medium ${stockFilter === "always-stock" ? "text-indigo-600" : "text-slate-500"}`}>
+                  {stockFilter === "always-stock" ? "✓ 正在篩選長期充足" : "點擊篩選長期充足"}
+                </span>
+              </button>
+
+              {/* Card 4: 缺貨產品 */}
+              <button
+                onClick={() => {
+                  setStockFilter("zero-stock");
+                  setCurrentPage(1);
+                }}
+                className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+                  stockFilter === "zero-stock"
+                    ? "bg-rose-50 border-rose-400 text-rose-900 shadow-sm scale-[1.02]"
+                    : "bg-white text-slate-900 border-slate-100 hover:border-slate-300 hover:shadow-xs"
+                }`}
+              >
+                <span className={`text-[10px] uppercase tracking-wider font-bold block ${stockFilter === "zero-stock" ? "text-rose-600" : "text-slate-400"}`}>缺貨產品</span>
+                <span className={`text-2xl font-black mt-1 block ${stockFilter === "zero-stock" ? "text-rose-750" : "text-rose-600"}`}>
+                  {products.filter(p => {
+                    if (p.allValues && p.allValues.length > 28) {
+                      const ab = (p.allValues[27] || "").trim();
+                      const ac = (p.allValues[28] || "").trim();
+                      return ab === "0" && ac === "0";
+                    }
+                    return !p.alwaysStock && p.secondaryStockCount === "0";
+                  }).length}
+                </span>
+                <span className={`text-[10px] block mt-1.5 font-medium ${stockFilter === "zero-stock" ? "text-rose-600" : "text-slate-500"}`}>
+                  {stockFilter === "zero-stock" ? "✓ 正在篩選缺貨產品" : "點擊篩選缺貨 (Col AB & AC = 0)"}
+                </span>
+              </button>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
@@ -1208,7 +1368,6 @@ export default function App() {
                     <thead className="bg-slate-50/85 text-[10px] text-slate-400 uppercase font-extrabold tracking-wider border-b border-slate-100">
                       <tr>
                         <th className="px-4 py-3">圖片</th>
-                        <th className="px-4 py-3">SKU / 編號</th>
                         <th className="px-4 py-3">商品名稱</th>
                         <th className="px-4 py-3 text-right">單價</th>
                         <th className="px-4 py-3 text-center">庫存狀態</th>
@@ -1218,7 +1377,7 @@ export default function App() {
                     <tbody className="divide-y divide-slate-100">
                       {processedProducts.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="px-4 py-10 text-center text-slate-400 italic">
+                          <td colSpan={5} className="px-4 py-10 text-center text-slate-400 italic">
                             沒有與您的搜尋條件匹配的商品記錄。
                           </td>
                         </tr>
@@ -1235,9 +1394,6 @@ export default function App() {
                                   version={imageVersion}
                                 />
                               </div>
-                            </td>
-                            <td className="px-4 py-2 font-mono text-[10px] text-indigo-750 font-bold">
-                              {prod.id}
                             </td>
                             <td className="px-4 py-2">
                               <div className="font-bold text-slate-800 line-clamp-1">{prod.name}</div>
@@ -1335,10 +1491,17 @@ export default function App() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 mt-1.5">
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1 animate-pulse"></span>
-                      表格實時連接
-                    </span>
+                    {isOffline || usingOfflineBackup ? (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1 animate-pulse"></span>
+                        離線瀏覽模式
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1 animate-pulse"></span>
+                        表格實時連接
+                      </span>
+                    )}
                     <span className="text-[11px] text-slate-400 font-medium">
                       {products.length > 0 ? `共 ${products.length.toLocaleString()} 款商品` : "正在載入..."}
                     </span>
@@ -1347,12 +1510,25 @@ export default function App() {
               </div>
 
               {/* Navigation Actions */}
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 md:gap-3">
                 <div className="hidden lg:flex flex-col items-end text-right text-xs">
                   <span className="text-slate-400 font-medium flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5" /> 已校對時間: {syncTime || "離線備份資料"}
                   </span>
                 </div>
+
+                {/* Sheets Synchronizer Button */}
+                <button
+                  onClick={() => loadProducts(true)}
+                  disabled={syncing}
+                  className={`p-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-all flex items-center gap-1.5 font-bold text-xs cursor-pointer ${
+                    syncing ? "opacity-60 cursor-not-allowed" : ""
+                  }`}
+                  title="從 Google Sheet 同步最新數據"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${syncing ? "animate-spin" : ""}`} />
+                  <span className="hidden sm:inline">{syncing ? "同步中..." : "同步數據"}</span>
+                </button>
 
                 {/* Back to Management dashboard */}
                 <button
@@ -1583,6 +1759,7 @@ export default function App() {
                     {stockFilter === "in-stock" && "僅顯示有現貨"}
                     {stockFilter === "out-of-stock" && "無現貨 (不顯示/圖片置灰)"}
                     {stockFilter === "always-stock" && "長期充足 (無限量供應)"}
+                    {stockFilter === "zero-stock" && "缺貨產品 (Col AB & AC = 0)"}
                   </span>
                   <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isStockDropdownOpen ? "rotate-180" : ""}`} />
                 </button>
@@ -1593,7 +1770,8 @@ export default function App() {
                       { value: "all", label: "顯示全部商品" },
                       { value: "in-stock", label: "僅顯示有現貨" },
                       { value: "out-of-stock", label: "無現貨 (不顯示/圖片置灰)" },
-                      { value: "always-stock", label: "長期充足 (無限量供應)" }
+                      { value: "always-stock", label: "長期充足 (無限量供應)" },
+                      { value: "zero-stock", label: "缺貨產品 (Col AB & AC = 0)" }
                     ].map(opt => (
                       <button
                         key={opt.value}
