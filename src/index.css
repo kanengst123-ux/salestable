@@ -27,3 +27,45 @@
   animation: slideLeft 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+/* Elegant High-Fidelity Catalog Printer Style Override */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  
+  /* Hide all generic app layout elements */
+  body > div:not(#print-catalog-container) {
+    display: none !important;
+  }
+
+  /* Make print catalog container visible & occupy full printable paper */
+  #print-catalog-container {
+    display: block !important;
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    background: white !important;
+  }
+
+  /* Force page breaks on specific categories and index page elements */
+  .print-page-break {
+    page-break-before: always !important;
+    break-before: page !important;
+  }
+
+  /* Keep cards and products intact inside columns */
+  .grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 16px !important;
+  }
+
+  div {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}
+
+

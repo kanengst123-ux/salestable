@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { jsPDF } from "jspdf";
 import { 
   Search, 
   Filter, 
@@ -34,7 +35,8 @@ import {
   Eye,
   Share,
   Smartphone,
-  Settings
+  Settings,
+  Download
 } from "lucide-react";
 
 interface Product {
@@ -375,6 +377,278 @@ export default function App() {
     setTimeout(() => {
       setToastMessage(null);
     }, 3000);
+  };
+
+  // Offline support & PDF catalog states
+  const [cacheProgress, setCacheProgress] = useState<number>(-1); // -1 means not running, 0-100 means percentage
+  const [cacheCount, setCacheCount] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
+  const [isPreviewingPdfPrint, setIsPreviewingPdfPrint] = useState<boolean>(false);
+
+  // Group products by top category for Catalog and PDF generation
+  const productsByCategory = useMemo(() => {
+    const groups: Record<string, Product[]> = {};
+    products.forEach(p => {
+      const rawCat = p.extraAttributes?.["Categories"] || "其他分類 / Uncategorized";
+      const cat = rawCat.split("/")[0]?.trim() || "其他分類 / Uncategorized";
+      if (!groups[cat]) {
+        groups[cat] = [];
+      }
+      groups[cat].push(p);
+    });
+    return groups;
+  }, [products]);
+
+  // One-click background cache downloader with progress tracking
+  const handlePrecacheAllImages = async () => {
+    if (typeof window === "undefined" || !("caches" in window)) {
+      showToast("您的瀏覽器不支援離線快取儲存。");
+      return;
+    }
+    try {
+      const cache = await caches.open("product-images-v1");
+      const listToCache = [...products];
+      if (listToCache.length === 0) {
+        showToast("沒有找到可快取的商品。");
+        return;
+      }
+      setCacheCount({ current: 0, total: listToCache.length });
+      setCacheProgress(0);
+      
+      const chunkSize = 5;
+      let cachedCount = 0;
+      
+      for (let i = 0; i < listToCache.length; i += chunkSize) {
+        const chunk = listToCache.slice(i, i + chunkSize);
+        await Promise.all(
+          chunk.map(async (p) => {
+            const possibleUrls = [
+              `/${p.id}.jpg`,
+              `/${p.id}.jpeg`,
+              `/products/${p.id}.jpg`,
+              `/images/${p.id}.jpg`,
+              p.extraAttributes?.["Image URLs"]?.trim()
+            ].filter(Boolean) as string[];
+
+            for (const url of possibleUrls) {
+              try {
+                const cached = await cache.match(url);
+                if (cached) {
+                  break;
+                }
+
+                const isExternal = url.startsWith("http://") || url.startsWith("https://");
+                const fetchOptions: RequestInit = isExternal ? { mode: "no-cors" } : {};
+                const response = await fetch(url, fetchOptions);
+                if (response.ok || isExternal) {
+                  await cache.put(url, response);
+                  break; 
+                }
+              } catch {
+                // Ignore download failure for this option, try next fallback
+              }
+            }
+            cachedCount++;
+          })
+        );
+        
+        const progressPercentage = Math.round((cachedCount / listToCache.length) * 100);
+        setCacheProgress(progressPercentage);
+        setCacheCount({ current: cachedCount, total: listToCache.length });
+        
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      
+      showToast(`成功快取 ${listToCache.length} 款商品的圖片，現已支援完全離線瀏覽！`);
+      setTimeout(() => setCacheProgress(-1), 2000);
+    } catch (err) {
+      console.error("Precache failed:", err);
+      showToast("下載圖片快取時發生錯誤。");
+      setCacheProgress(-1);
+    }
+  };
+
+  // Programmatic PDF Exporter (jsPDF) with Outline Bookmarks of categories
+  const handleGenerateJsPdf = async () => {
+    try {
+      setIsGeneratingPdf(true);
+      showToast("正在下載中文字型並準備 PDF 目錄...");
+      
+      const doc = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+      });
+
+      let fontAdded = false;
+      try {
+        const fontUrl = "https://cdn.jsdelivr.net/npm/noto-sans-tc-subset@1.0.0/NotoSansTC-Regular.ttf";
+        const res = await fetch(fontUrl);
+        if (res.ok) {
+          const buffer = await res.arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          let binary = "";
+          for (let i = 0; i < bytes.byteLength; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const base64Font = window.btoa(binary);
+          
+          doc.addFileToVFS("NotoSansTC-Regular.ttf", base64Font);
+          doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "normal");
+          doc.setFont("NotoSansTC");
+          fontAdded = true;
+          console.log("NotoSansTC font loaded inside jsPDF successfully.");
+        }
+      } catch (err) {
+        console.warn("Could not fetch subset Chinese font offline, using Helvetica fallback", err);
+      }
+
+      if (!fontAdded) {
+        doc.setFont("helvetica", "normal");
+      }
+
+      // 1. Cover Page
+      doc.setFillColor(15, 23, 42); // slate-900 background
+      doc.rect(0, 0, 210, 297, "F");
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(26);
+      doc.text(fontAdded ? "商品目錄" : "PRODUCT CATALOG", 105, 100, { align: "center" });
+
+      doc.setFontSize(14);
+      doc.setTextColor(226, 232, 240); // slate-200
+      doc.text(`Price Tier: ${selectedPriceTier} 系列`, 105, 120, { align: "center" });
+
+      doc.setFontSize(10);
+      doc.setTextColor(148, 163, 184); // slate-400
+      const nowStr = new Date().toLocaleDateString("zh-TW", { year: "numeric", month: "long", day: "numeric" });
+      doc.text(`產出日期: ${nowStr} | 共 ${products.length} 款商品`, 105, 240, { align: "center" });
+      doc.text("支援完全離線查閱，隨時隨地，快速詢價", 105, 250, { align: "center" });
+
+      // Create outline bookmarks root
+      const outline = doc.outline;
+      let categoriesParent = null;
+      if (outline) {
+        categoriesParent = outline.add(null, fontAdded ? "商品分類" : "Categories", { pageNumber: 1 });
+      }
+
+      // 2. Loop categories and list products
+      const cats = Object.keys(productsByCategory);
+      let pageNum = 1;
+
+      cats.forEach((catName, catIdx) => {
+        doc.addPage();
+        pageNum++;
+
+        if (outline && categoriesParent) {
+          outline.add(categoriesParent, catName, { pageNumber: pageNum });
+        }
+
+        // Category Page style
+        doc.setFillColor(248, 250, 252); // slate-50
+        doc.rect(0, 0, 210, 25, "F");
+
+        doc.setFillColor(79, 70, 229); // indigo-600
+        doc.rect(15, 8, 3, 10, "F");
+
+        doc.setFontSize(16);
+        doc.setTextColor(15, 23, 42); // slate-900
+        doc.text(catName, 22, 16);
+
+        doc.setFontSize(9);
+        doc.setTextColor(100, 116, 139); // slate-500
+        doc.text(`分類編號: ${catIdx + 1} | 頁碼: ${pageNum}`, 195, 15, { align: "right" });
+
+        // Table Header
+        let y = 38;
+        doc.setFillColor(241, 245, 249); // slate-100
+        doc.rect(15, y - 5, 180, 8, "F");
+
+        doc.setFontSize(9);
+        doc.setTextColor(71, 85, 105); // slate-600
+        doc.text("編號 / ID", 18, y);
+        doc.text("商品名稱 / Name", 45, y);
+        doc.text("單價 / Price", 145, y, { align: "right" });
+        doc.text("庫存 / Stock", 180, y, { align: "center" });
+
+        y += 8;
+
+        const catProds = productsByCategory[catName];
+        catProds.forEach((p, idx) => {
+          if (y > 270) {
+            doc.addPage();
+            pageNum++;
+            
+            doc.setFillColor(248, 250, 252);
+            doc.rect(0, 0, 210, 20, "F");
+            doc.setFontSize(11);
+            doc.setTextColor(15, 23, 42);
+            doc.text(`${catName} (續)`, 15, 13);
+            doc.setFontSize(9);
+            doc.text(`頁碼: ${pageNum}`, 195, 13, { align: "right" });
+
+            // Table Header on new page
+            y = 30;
+            doc.setFillColor(241, 245, 249);
+            doc.rect(15, y - 5, 180, 8, "F");
+            doc.setTextColor(71, 85, 105);
+            doc.text("編號 / ID", 18, y);
+            doc.text("商品名稱 / Name", 45, y);
+            doc.text("單價 / Price", 145, y, { align: "right" });
+            doc.text("庫存 / Stock", 180, y, { align: "center" });
+            
+            y += 8;
+          }
+
+          // Row background alternation
+          if (idx % 2 === 1) {
+            doc.setFillColor(250, 250, 250);
+            doc.rect(15, y - 4, 180, 6.5, "F");
+          }
+
+          doc.setFontSize(8.5);
+          doc.setTextColor(15, 23, 42);
+
+          // ID
+          doc.text(p.id, 18, y);
+
+          // Name (truncate for safe padding alignment)
+          const maxNameLen = fontAdded ? 25 : 35;
+          let displayName = p.name;
+          if (displayName.length > maxNameLen) {
+            displayName = displayName.substring(0, maxNameLen) + "...";
+          }
+          doc.text(displayName, 45, y);
+
+          // Price
+          const priceVal = parseFloat(getProductPrice(p));
+          let priceStr = "詢價決定";
+          if (priceVal > 0) {
+            priceStr = `HK$${priceVal.toFixed(2)}`;
+          }
+          doc.text(priceStr, 145, y, { align: "right" });
+
+          // Stock status
+          let stockStr = "有現貨";
+          if (p.alwaysStock) {
+            stockStr = "長期充足";
+          } else if (!p.hasStock) {
+            stockStr = "無現貨";
+          }
+          doc.text(stockStr, 180, y, { align: "center" });
+
+          y += 6.5;
+        });
+      });
+
+      doc.save(`Product_Catalog_Price_Tier_${selectedPriceTier}.pdf`);
+      showToast("PDF 商品目錄導出成功！");
+    } catch (error) {
+      console.error("PDF export failed:", error);
+      showToast("PDF 導出失敗。");
+    } finally {
+      setIsGeneratingPdf(false);
+    }
   };
 
   // Photo List and Queue Management
@@ -1828,6 +2102,84 @@ export default function App() {
                     ))}
                   </div>
                 )}
+              </div>
+            </div>
+
+            {/* Offline Support & PDF Exporter Toolbox */}
+            <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm space-y-4">
+              <h3 className="font-bold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-2">
+                <Smartphone className="w-3.5 h-3.5 text-indigo-500" />
+                <span>離線同步與 PDF 工具箱</span>
+              </h3>
+
+              <div className="space-y-3">
+                {/* Image Pre-cacher */}
+                <div className="bg-slate-50 rounded-xl p-3 border border-slate-150 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-700">圖片快取同步器</span>
+                    <span className="text-[10px] text-slate-400 font-semibold">
+                      {cacheProgress >= 0 ? `${cacheCount.current}/${cacheCount.total}` : "已就緒"}
+                    </span>
+                  </div>
+
+                  <p className="text-[10px] text-slate-500 leading-normal">
+                    一鍵下載目錄中所有商品圖片至手機/電腦。下載後，在飛機、港口等完全無訊號環境也能正常顯示商品相片！
+                  </p>
+
+                  {cacheProgress >= 0 ? (
+                    <div className="space-y-1.5 pt-1">
+                      <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                        <div 
+                          className="bg-emerald-500 h-full transition-all duration-150" 
+                          style={{ width: `${cacheProgress}%` }}
+                        ></div>
+                      </div>
+                      <div className="text-[9px] text-emerald-600 font-bold flex items-center justify-between animate-pulse">
+                        <span>正在為您的手機下載圖片...</span>
+                        <span>{cacheProgress}%</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handlePrecacheAllImages}
+                      className="w-full py-2 px-3 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 text-emerald-600" />
+                      立即下載全目錄圖片
+                    </button>
+                  )}
+                </div>
+
+                {/* PDF Generation */}
+                <div className="bg-slate-50 rounded-xl p-3 border border-slate-150 space-y-2">
+                  <span className="text-[11px] font-bold text-slate-700 block">PDF 目錄產生器</span>
+                  <p className="text-[10px] text-slate-500 leading-normal">
+                    匯出帶有商品分類書籤的 A4 PDF 文件。便於列印、分發給客戶或直接在手機儲存閱讀。
+                  </p>
+
+                  <div className="grid grid-cols-1 gap-1.5 pt-1">
+                    <button
+                      onClick={() => setIsPreviewingPdfPrint(true)}
+                      className="w-full py-2 px-3 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      <FileText className="w-3.5 h-3.5 text-amber-400" />
+                      🖨️ 列印 / 儲存 PDF 目錄
+                    </button>
+                    
+                    <button
+                      onClick={handleGenerateJsPdf}
+                      disabled={isGeneratingPdf}
+                      className="w-full py-2 px-3 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      {isGeneratingPdf ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-500" />
+                      ) : (
+                        <ExternalLink className="w-3.5 h-3.5 text-indigo-500" />
+                      )}
+                      <span>{isGeneratingPdf ? "正在產生 PDF..." : "下載帶書籤 PDF"}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -4063,6 +4415,238 @@ function revertStockForOrders(orderIdsMap) {
           </div>
         </div>
       )}
+
+      {/* High-Fidelity PDF / Print Catalog Preview Modal */}
+      {isPreviewingPdfPrint && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex flex-col overflow-y-auto p-4 sm:p-6 md:p-10">
+          <div className="w-full max-w-5xl bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden mx-auto my-auto border border-slate-100 animate-slideUp print:hidden">
+            {/* Header bar */}
+            <header className="p-4 sm:p-5 border-b border-slate-150 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-amber-400" />
+                <div>
+                  <h3 className="font-extrabold text-sm sm:text-base tracking-tight">列印預覽：PDF 商品目錄</h3>
+                  <p className="text-[10px] text-slate-300">格式：A4 縱向排版 (適合另存為 PDF 文件)</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    window.print();
+                  }}
+                  className="py-2 px-4 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 transition-all shadow-md shadow-amber-500/20 cursor-pointer"
+                >
+                  <FileText className="w-4 h-4" />
+                  列印 / 另存為 PDF
+                </button>
+                <button
+                  onClick={() => setIsPreviewingPdfPrint(false)}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </header>
+
+            {/* Print Settings Guidelines bar */}
+            <div className="p-4 bg-amber-50 border-b border-amber-200/60 text-amber-950 text-xs flex items-start gap-3">
+              <Info className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-amber-900">💡 另存為 PDF 完美列印設定指引：</p>
+                <ol className="list-decimal pl-4 mt-1 space-y-1 text-[11px] text-amber-800 font-medium">
+                  <li>點擊右上角的「<strong>列印 / 另存為 PDF</strong>」，將目的地設為「<strong>另存為 PDF (Save as PDF)</strong>」。</li>
+                  <li>在列印設定的<strong>「更多設定」</strong>(More settings) 中：
+                    <ul className="list-disc pl-4 mt-0.5 space-y-0.5 font-bold text-amber-950">
+                      <li>將「邊界」(Margins) 設為「<strong>無</strong>」(None) 或「預設」，以獲得最大顯示區域。</li>
+                      <li>必須勾選「<strong>背景圖形</strong>」(Background graphics) 以顯示顏色背景與卡片樣式！</li>
+                    </ul>
+                  </li>
+                  <li>此目錄在無網訊號狀態下亦可完美列印，圖片將自動載入您的手機離線快取。</li>
+                </ol>
+              </div>
+            </div>
+
+            {/* Document preview scrolling sheet */}
+            <div className="p-6 sm:p-10 bg-slate-100 flex-grow overflow-y-auto max-h-[70vh] flex justify-center">
+              {/* Virtual A4 representation for user visual validation */}
+              <div className="w-[210mm] min-h-[297mm] bg-white shadow-lg p-10 border border-slate-200 text-slate-800 font-sans leading-relaxed text-sm box-border relative">
+                
+                {/* Visual Cover Page */}
+                <div className="flex flex-col justify-between h-[250mm] border-b border-slate-100 pb-10 mb-10">
+                  <div className="text-center pt-20 space-y-4">
+                    <div className="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center mx-auto shadow-lg">
+                      <Package className="w-8 h-8 text-white" />
+                    </div>
+                    <h1 className="text-3xl font-black tracking-tight text-slate-900 pt-4">產品目錄 / PRODUCT CATALOG</h1>
+                    <p className="text-xs uppercase tracking-widest text-indigo-600 font-extrabold font-mono text-center">
+                      Price Tier: {selectedPriceTier} 系列商品
+                    </p>
+                  </div>
+
+                  <div className="text-center space-y-2 bg-slate-50 border border-slate-100 rounded-2xl p-6 max-w-md mx-auto">
+                    <p className="text-xs text-slate-500 font-bold text-center">同步校對日期：{syncTime || "離線備份資料"}</p>
+                    <p className="text-xs text-slate-400 font-medium text-center">共計 {products.length} 款商品 | {Object.keys(productsByCategory).length} 大分類</p>
+                    <p className="text-[10px] text-slate-400 font-medium leading-normal pt-2 border-t border-slate-150 text-center">
+                      本目錄包含高畫質商品照片與詳細規格。您可以在手機完全離線時隨時查閱並展示給客戶。
+                    </p>
+                  </div>
+                </div>
+
+                {/* Table of Contents */}
+                <div className="page-break mb-10 pb-10 border-b border-slate-100">
+                  <h2 className="text-xl font-bold text-slate-900 mb-6 pb-2 border-b-2 border-slate-900">
+                    目錄分類索引 / Table of Contents
+                  </h2>
+                  <div className="space-y-4">
+                    {Object.keys(productsByCategory).map((catName, idx) => (
+                      <div key={catName} className="flex items-center justify-between text-xs border-b border-dashed border-slate-200 pb-2">
+                        <span className="font-bold text-slate-800">{idx + 1}. {catName}</span>
+                        <span className="text-slate-400 font-mono font-semibold">{productsByCategory[catName].length} 款商品</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Categories & Products loops */}
+                {Object.keys(productsByCategory).map((catName, idx) => (
+                  <div key={catName} className="mb-10 pb-10 border-b border-slate-100">
+                    <div className="flex items-center justify-between mb-4 pb-2 border-b-2 border-indigo-600">
+                      <h3 className="text-lg font-black text-indigo-900 flex items-center gap-2">
+                        <span className="w-1.5 h-6 bg-indigo-600 rounded-sm inline-block"></span>
+                        {catName}
+                      </h3>
+                      <span className="text-xs text-slate-400 font-bold">分類編號: {idx + 1}</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      {productsByCategory[catName].map(p => (
+                        <div key={p.id} className="border border-slate-150 rounded-xl p-3 flex gap-3 bg-slate-50/50 items-start">
+                          {/* Photo */}
+                          <div className="w-16 h-16 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 relative">
+                            <ProductImage
+                              id={p.id}
+                              name={p.name}
+                              fallbackUrl={p.extraAttributes?.["Image URLs"]}
+                              isOutOfStock={!p.hasStock}
+                              version={imageVersion}
+                            />
+                          </div>
+                          {/* Info */}
+                          <div className="space-y-1 min-w-0 flex-grow">
+                            <span className="text-[9px] font-mono font-bold text-slate-400 block uppercase">
+                              SKU: {p.id}
+                            </span>
+                            <h4 className="font-bold text-xs text-slate-800 line-clamp-1">{p.name}</h4>
+                            <div className="text-xs font-black text-slate-900">
+                              {parseFloat(getProductPrice(p)) > 0 ? (
+                                `HK$${parseFloat(getProductPrice(p)).toFixed(2)}`
+                              ) : (
+                                <span className="text-[10px] text-rose-500 font-extrabold bg-rose-50 px-1 py-0.2 rounded">價格由詢價決定</span>
+                              )}
+                            </div>
+                            {p.extraAttributes?.["Merchant Remark"] && (
+                              <p className="text-[9px] text-slate-400 line-clamp-1 italic">
+                                備註: {p.extraAttributes?.["Merchant Remark"]}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden real-print output layout wrapper targeting browser printer */}
+      <div id="print-catalog-container" className="hidden print:block bg-white p-10 font-sans text-slate-900">
+        {/* Cover Page */}
+        <div className="flex flex-col justify-between h-[270mm] pb-10">
+          <div className="text-center pt-32 space-y-4">
+            <h1 className="text-4xl font-black tracking-tight text-slate-900">產品目錄 / PRODUCT CATALOG</h1>
+            <p className="text-sm uppercase tracking-widest text-indigo-600 font-extrabold font-mono pt-2">
+              Price Tier: {selectedPriceTier} 系列商品
+            </p>
+            <div className="w-24 h-1 bg-indigo-600 mx-auto my-6"></div>
+          </div>
+
+          <div className="text-center space-y-2 max-w-md mx-auto pt-48">
+            <p className="text-sm text-slate-600 font-bold">同步校對日期：{syncTime || "離線備份資料"}</p>
+            <p className="text-xs text-slate-400 font-medium">共計 {products.length} 款商品 | {Object.keys(productsByCategory).length} 大分類</p>
+            <p className="text-[10px] text-slate-400 font-medium pt-4">
+              本產品目錄支援手機完全離線查閱
+            </p>
+          </div>
+        </div>
+
+        {/* Index Page */}
+        <div className="print-page-break h-[270mm]">
+          <h2 className="text-2xl font-black text-slate-900 mb-8 pb-3 border-b-4 border-slate-900">
+            目錄索引 / Index
+          </h2>
+          <div className="space-y-4 max-w-xl">
+            {Object.keys(productsByCategory).map((catName, idx) => (
+              <div key={catName} className="flex items-center justify-between text-sm border-b border-dashed border-slate-200 pb-3">
+                <span className="font-extrabold text-slate-800">{idx + 1}. {catName}</span>
+                <span className="text-slate-500 font-mono font-bold">{productsByCategory[catName].length} 款商品</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Category Page Loop */}
+        {Object.keys(productsByCategory).map((catName, idx) => (
+          <div key={catName} className="print-page-break pb-10">
+            <div className="flex items-center justify-between mb-6 pb-2 border-b-4 border-indigo-600">
+              <h3 className="text-xl font-black text-indigo-900">
+                {idx + 1}. {catName}
+              </h3>
+              <span className="text-xs text-slate-400 font-bold font-mono">共計 {productsByCategory[catName].length} 款商品</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              {productsByCategory[catName].map(p => (
+                <div key={p.id} className="border border-slate-200 rounded-xl p-4 flex gap-4 bg-slate-50/50 items-start">
+                  {/* Photo */}
+                  <div className="w-20 h-20 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 relative">
+                    <ProductImage
+                      id={p.id}
+                      name={p.name}
+                      fallbackUrl={p.extraAttributes?.["Image URLs"]}
+                      isOutOfStock={!p.hasStock}
+                      version={imageVersion}
+                    />
+                  </div>
+                  {/* Info */}
+                  <div className="space-y-1.5 min-w-0 flex-grow">
+                    <span className="text-[10px] font-mono font-bold text-slate-400 block uppercase tracking-wide">
+                      SKU ID: {p.id}
+                    </span>
+                    <h4 className="font-bold text-sm text-slate-800 leading-snug">{p.name}</h4>
+                    <div className="text-sm font-black text-slate-900">
+                      {parseFloat(getProductPrice(p)) > 0 ? (
+                        `HK$${parseFloat(getProductPrice(p)).toFixed(2)}`
+                      ) : (
+                        <span className="text-[10px] text-rose-500 font-extrabold bg-rose-50 px-2 py-0.5 rounded">價格由詢價決定</span>
+                      )}
+                    </div>
+                    {p.extraAttributes?.["Merchant Remark"] && (
+                      <p className="text-[10px] text-slate-500 italic pt-1 border-t border-slate-100">
+                        備註: {p.extraAttributes?.["Merchant Remark"]}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
 
     </div>
   );
