@@ -310,12 +310,19 @@ const SHEET_SETTINGS_FILE = path.join(process.cwd(), "sheet_settings.json");
 function getSheetSettings() {
   try {
     if (fs.existsSync(SHEET_SETTINGS_FILE)) {
-      return JSON.parse(fs.readFileSync(SHEET_SETTINGS_FILE, "utf-8"));
+      const data = JSON.parse(fs.readFileSync(SHEET_SETTINGS_FILE, "utf-8"));
+      return {
+        appsScriptUrl: data.appsScriptUrl || "https://script.google.com/macros/s/AKfycbxJBpLD4XstIGc_47V4ys3WYr_OX5vfsc36u5aEIsAyv06wYDWT_FFuAooQVMt1Pq8R/exec",
+        enabled: data.enabled !== undefined ? !!data.enabled : true
+      };
     }
   } catch (error) {
     console.error("Failed to read sheet settings:", error);
   }
-  return { appsScriptUrl: "", enabled: false };
+  return { 
+    appsScriptUrl: "https://script.google.com/macros/s/AKfycbxJBpLD4XstIGc_47V4ys3WYr_OX5vfsc36u5aEIsAyv06wYDWT_FFuAooQVMt1Pq8R/exec", 
+    enabled: true 
+  };
 }
 
 function saveSheetSettings(settings: any) {

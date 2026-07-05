@@ -364,7 +364,10 @@ export default function App() {
     }
   });
 
-  const [sheetSettings, setSheetSettings] = useState({ appsScriptUrl: "", enabled: false });
+  const [sheetSettings, setSheetSettings] = useState({
+    appsScriptUrl: "https://script.google.com/macros/s/AKfycbxJBpLD4XstIGc_47V4ys3WYr_OX5vfsc36u5aEIsAyv06wYDWT_FFuAooQVMt1Pq8R/exec",
+    enabled: true
+  });
   const [savingSettings, setSavingSettings] = useState(false);
   const [showScriptGuide, setShowScriptGuide] = useState(false);
   const [isSheetSettingsOpen, setIsSheetSettingsOpen] = useState(false);
