@@ -112,27 +112,47 @@ const ProductImage: React.FC<{
   isOutOfStock: boolean;
   version?: number;
 }> = ({ id, name, fallbackUrl, isOutOfStock, version = 0 }) => {
-  // Sync initial state directly to avoid blank/empty rendering on first mount
-  const getInitialSrc = () => {
-    const suffix = version ? `?v=${version}` : "";
-    return `/${id}.jpg${suffix}`;
-  };
+  const cleanId = id.replace(/^(id[-_])?/i, "");
+  const suffix = version ? `?v=${version}` : "";
+  const fallbackRaw = fallbackUrl?.trim() || "";
+  const fallbackUrls = useMemo(() => {
+    return fallbackRaw.split(/[,\n]/).map(u => u.trim()).filter(Boolean);
+  }, [fallbackRaw]);
 
-  const [imgSrc, setImgSrc] = useState<string>(getInitialSrc);
-  const [attempt, setAttempt] = useState<number>(0);
+  const sequentialUrls = useMemo(() => {
+    const localPatterns = [
+      `/${id}.jpg`,
+      `/${id}.jpeg`,
+      `/id-${cleanId}.jpg`,
+      `/id-${cleanId}.jpeg`,
+      `/${cleanId}.jpg`,
+      `/${cleanId}.jpeg`,
+      `/products/${id}.jpg`,
+      `/products/id-${cleanId}.jpg`,
+      `/products/${cleanId}.jpg`,
+      `/images/${id}.jpg`,
+      `/images/id-${cleanId}.jpg`,
+      `/images/${cleanId}.jpg`,
+    ];
+    return [
+      ...localPatterns.map(p => `${p}${suffix}`),
+      ...fallbackUrls
+    ];
+  }, [id, cleanId, suffix, fallbackUrls]);
+
+  const [urlIndex, setUrlIndex] = useState<number>(0);
   const [cachedUrl, setCachedUrl] = useState<string>("");
 
+  const imgSrc = sequentialUrls[urlIndex] || "";
+
   useEffect(() => {
-    // Keep state updated if id or version attributes change
-    const suffix = version ? `?v=${version}` : "";
-    setImgSrc(`/${id}.jpg${suffix}`);
-    setAttempt(0);
+    setUrlIndex(0);
     setCachedUrl("");
-  }, [id, version]);
+  }, [id, version, fallbackUrl]);
 
   // Intercept cache and load directly as a local Blob to ensure instant offline/cached rendering
   useEffect(() => {
-    if (attempt === 5 || !imgSrc) return;
+    if (urlIndex >= sequentialUrls.length || !imgSrc) return;
     let active = true;
     let objectUrl = "";
 
@@ -140,7 +160,8 @@ const ProductImage: React.FC<{
       if (typeof window !== "undefined" && "caches" in window) {
         try {
           const cache = await caches.open("product-images-v1");
-          const matched = await cache.match(imgSrc);
+          // Match with ignoreSearch option to ignore version params
+          let matched = await cache.match(imgSrc, { ignoreSearch: true });
           if (matched && active) {
             // Opaque responses can't be read as blob, so serve them directly from cache via image source URL
             if (matched.type === "opaque") {
@@ -177,28 +198,13 @@ const ProductImage: React.FC<{
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [imgSrc, attempt]);
+  }, [imgSrc, urlIndex, sequentialUrls]);
 
   const handleImgError = () => {
-    const suffix = version ? `?v=${version}` : "";
-    if (attempt === 0) {
-      setImgSrc(`/${id}.jpeg${suffix}`);
-      setAttempt(1);
-    } else if (attempt === 1) {
-      setImgSrc(`/products/${id}.jpg${suffix}`);
-      setAttempt(2);
-    } else if (attempt === 2) {
-      setImgSrc(`/images/${id}.jpg${suffix}`);
-      setAttempt(3);
-    } else if (attempt === 3) {
-      if (fallbackUrl && fallbackUrl.trim().length > 0) {
-        setImgSrc(fallbackUrl.trim());
-        setAttempt(4);
-      } else {
-        setAttempt(5); // Show customized SVG placeholder
-      }
+    if (urlIndex < sequentialUrls.length - 1) {
+      setUrlIndex(prev => prev + 1);
     } else {
-      setAttempt(5); // Show customized SVG placeholder
+      setUrlIndex(sequentialUrls.length); // Render fallback placeholder initials
     }
   };
 
@@ -207,12 +213,24 @@ const ProductImage: React.FC<{
     if (imgSrc && !cachedUrl && typeof window !== "undefined" && "caches" in window) {
       try {
         const cache = await caches.open("product-images-v1");
-        const matched = await cache.match(imgSrc);
+        const matched = await cache.match(imgSrc, { ignoreSearch: true });
         if (!matched) {
           const isExternal = imgSrc.startsWith("http://") || imgSrc.startsWith("https://");
-          const fetchOptions: RequestInit = isExternal ? { mode: "no-cors" } : {};
-          const response = await fetch(imgSrc, fetchOptions);
-          if (response.ok || isExternal) {
+          let response: Response | null = null;
+          if (isExternal) {
+            try {
+              response = await fetch(imgSrc); // CORS fetch
+            } catch {
+              try {
+                response = await fetch(imgSrc, { mode: "no-cors" }); // fallback opaque
+              } catch {
+                // Ignore
+              }
+            }
+          } else {
+            response = await fetch(imgSrc);
+          }
+          if (response && (response.ok || response.status === 0)) {
             await cache.put(imgSrc, response);
           }
         }
@@ -222,7 +240,7 @@ const ProductImage: React.FC<{
     }
   };
 
-  if (attempt === 5) {
+  if (urlIndex >= sequentialUrls.length) {
     const initials = name.trim().slice(0, 3).toUpperCase();
     return (
       <div className={`w-full h-full flex flex-col items-center justify-center bg-gradient-to-b from-slate-100 to-slate-200 text-slate-500 relative transition-all duration-300 overflow-hidden ${isOutOfStock ? "grayscale contrast-75 brightness-90 opacity-40" : ""}`}>
@@ -422,25 +440,51 @@ export default function App() {
         const chunk = listToCache.slice(i, i + chunkSize);
         await Promise.all(
           chunk.map(async (p) => {
+            const cleanId = p.id.replace(/^(id[-_])?/i, "");
+            const fallbackRaw = p.extraAttributes?.["Image URLs"]?.trim() || "";
+            const fallbackUrls = fallbackRaw.split(/[,\n]/).map(u => u.trim()).filter(Boolean);
+
             const possibleUrls = [
               `/${p.id}.jpg`,
               `/${p.id}.jpeg`,
+              `/id-${cleanId}.jpg`,
+              `/id-${cleanId}.jpeg`,
+              `/${cleanId}.jpg`,
+              `/${cleanId}.jpeg`,
               `/products/${p.id}.jpg`,
+              `/products/id-${cleanId}.jpg`,
+              `/products/${cleanId}.jpg`,
               `/images/${p.id}.jpg`,
-              p.extraAttributes?.["Image URLs"]?.trim()
+              `/images/id-${cleanId}.jpg`,
+              `/images/${cleanId}.jpg`,
+              ...fallbackUrls
             ].filter(Boolean) as string[];
 
             for (const url of possibleUrls) {
               try {
-                const cached = await cache.match(url);
+                // Use ignoreSearch to skip checking version param differences
+                const cached = await cache.match(url, { ignoreSearch: true });
                 if (cached) {
                   break;
                 }
 
                 const isExternal = url.startsWith("http://") || url.startsWith("https://");
-                const fetchOptions: RequestInit = isExternal ? { mode: "no-cors" } : {};
-                const response = await fetch(url, fetchOptions);
-                if (response.ok || isExternal) {
+                let response: Response | null = null;
+                if (isExternal) {
+                  try {
+                    response = await fetch(url); // Try standard CORS
+                  } catch {
+                    try {
+                      response = await fetch(url, { mode: "no-cors" }); // Fallback to opaque
+                    } catch {
+                      // both failed
+                    }
+                  }
+                } else {
+                  response = await fetch(url);
+                }
+
+                if (response && (response.ok || response.status === 0)) {
                   await cache.put(url, response);
                   break; 
                 }

@@ -85,7 +85,7 @@ self.addEventListener('fetch', (event) => {
 
   if (isImage) {
     event.respondWith(
-      caches.match(request).then((cachedResponse) => {
+      caches.match(request, { ignoreSearch: true }).then((cachedResponse) => {
         if (cachedResponse) {
           return cachedResponse;
         }
