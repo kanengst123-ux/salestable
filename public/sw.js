@@ -6,8 +6,7 @@ const DATA_CACHE_NAME = 'salestable-data-v1';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
-  '/src/main.tsx',
-  '/src/index.css'
+  '/manifest.json'
 ];
 
 self.addEventListener('install', (event) => {
