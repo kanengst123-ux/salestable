@@ -163,6 +163,14 @@ const ProductImage: React.FC<{
           // Match with ignoreSearch option to ignore version params
           let matched = await cache.match(imgSrc, { ignoreSearch: true });
           if (matched && active) {
+            // Self-heal: check if cached response is actually an HTML error page from routing redirect fallback
+            const contentType = matched.headers.get("content-type");
+            if (contentType && contentType.includes("text/html")) {
+              await cache.delete(imgSrc, { ignoreSearch: true });
+              matched = undefined;
+            }
+          }
+          if (matched && active) {
             // Opaque responses can't be read as blob, so serve them directly from cache via image source URL
             if (matched.type === "opaque") {
               setCachedUrl(imgSrc);
@@ -231,7 +239,10 @@ const ProductImage: React.FC<{
             response = await fetch(imgSrc);
           }
           if (response && (response.ok || response.status === 0)) {
-            await cache.put(imgSrc, response);
+            const contentType = response.headers.get("content-type");
+            if (!contentType || !contentType.includes("text/html")) {
+              await cache.put(imgSrc, response);
+            }
           }
         }
       } catch {
@@ -485,8 +496,11 @@ export default function App() {
                 }
 
                 if (response && (response.ok || response.status === 0)) {
-                  await cache.put(url, response);
-                  break; 
+                  const contentType = response.headers.get("content-type");
+                  if (!contentType || !contentType.includes("text/html")) {
+                    await cache.put(url, response);
+                    break; 
+                  }
                 }
               } catch {
                 // Ignore download failure for this option, try next fallback

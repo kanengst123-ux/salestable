@@ -87,11 +87,22 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       caches.match(request, { ignoreSearch: true }).then((cachedResponse) => {
         if (cachedResponse) {
-          return cachedResponse;
+          const contentType = cachedResponse.headers.get('content-type');
+          if (contentType && contentType.includes('text/html')) {
+            // Self-healing: delete corrupted cache entry and fall through to network
+            caches.open(IMAGE_CACHE_NAME).then((cache) => {
+              cache.delete(request, { ignoreSearch: true });
+            });
+          } else {
+            return cachedResponse;
+          }
         }
         return fetch(request).then((networkResponse) => {
-          // Allow caching of successful responses (status 200) or opaque cross-origin responses (status 0)
-          if (networkResponse.ok || networkResponse.status === 200 || networkResponse.status === 0) {
+          const contentType = networkResponse.headers.get('content-type');
+          const isHtml = contentType && contentType.includes('text/html');
+
+          // Allow caching of successful non-HTML responses (status 200) or opaque cross-origin responses (status 0)
+          if (!isHtml && (networkResponse.ok || networkResponse.status === 200 || networkResponse.status === 0)) {
             const copy = networkResponse.clone();
             caches.open(IMAGE_CACHE_NAME).then((cache) => {
               cache.put(request, copy);

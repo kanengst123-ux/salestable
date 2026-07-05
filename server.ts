@@ -807,7 +807,7 @@ app.get(["/:filename", "/products/:filename", "/images/:filename"], async (req, 
     console.error("Dynamic image resolution error:", err);
   }
 
-  next();
+  return res.status(404).send("Image not found");
 });
 
 // Serve static assets from public/assets if needed
@@ -823,7 +823,12 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("*", (req, res, next) => {
+      // If the path contains an extension, it's a static file request (not an HTML route), so return 404
+      const ext = path.extname(req.path);
+      if (ext && ext !== ".html") {
+        return res.status(404).send("Not found");
+      }
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
