@@ -51,6 +51,8 @@ interface Product {
   secondaryStockCount: string;
   extraAttributes: Record<string, string>;
   allValues: string[];
+  costCategoryName?: string;
+  costCategorySymbol?: string;
 }
 
 interface CartItem {
@@ -438,8 +440,7 @@ export default function App() {
   const productsByCategory = useMemo(() => {
     const groups: Record<string, Product[]> = {};
     products.forEach(p => {
-      const rawCat = p.extraAttributes?.["Categories"] || "其他分類 / Uncategorized";
-      const cat = rawCat.split("/")[0]?.trim() || "其他分類 / Uncategorized";
+      const cat = p.costCategoryName?.trim() || p.extraAttributes?.["Categories"]?.split("/")[0]?.trim() || "其他分類";
       if (!groups[cat]) {
         groups[cat] = [];
       }
@@ -809,8 +810,8 @@ export default function App() {
 
       // Sort products by category so that consecutive cards are grouped beautifully
       const sortedProducts = [...products].sort((a, b) => {
-        const catA = a.extraAttributes?.["Categories"] || "其他分類";
-        const catB = b.extraAttributes?.["Categories"] || "其他分類";
+        const catA = a.costCategoryName || "其他分類";
+        const catB = b.costCategoryName || "其他分類";
         return catA.localeCompare(catB, "zh-HK");
       });
 
@@ -847,7 +848,7 @@ export default function App() {
       const categoryPageMap: Record<string, number> = {};
       
       processedProducts.forEach((item, index) => {
-        const catName = item.product.extraAttributes?.["Categories"] || "其他分類";
+        const catName = item.product.costCategoryName || "其他分類";
         const pageIdx = Math.floor(index / productsPerPage);
         const actualPageNum = pageIdx + 2; // cover is page 1, product grid starts at page 2
         if (categoryPageMap[catName] === undefined) {
@@ -1009,7 +1010,7 @@ export default function App() {
           }
 
           // 6. Category Pill Badge
-          let catText = p.extraAttributes?.["Categories"] || "其他分類";
+          let catText = p.costCategoryName || "其他分類";
           if (catText.length > 12) {
             catText = catText.substring(0, 11) + "...";
           }
@@ -2209,7 +2210,7 @@ export default function App() {
                             <td className="px-4 py-2">
                               <div className="font-bold text-slate-800 line-clamp-1">{prod.name}</div>
                               <div className="text-[10px] text-slate-405 mt-0.5 line-clamp-1 text-slate-400">
-                                {prod.extraAttributes?.["Categories"] || "無分類"}
+                                {prod.costCategoryName || prod.extraAttributes?.["Categories"] || "無分類"}
                               </div>
                             </td>
                             <td className="px-4 py-2 text-right font-black text-slate-900 font-mono">

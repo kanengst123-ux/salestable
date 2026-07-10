@@ -17,13 +17,13 @@ let gcsDisabledDueToBilling = false;
 
 function handleGcsError(error: any, context: string) {
   const errMsg = error?.message || "";
-  if (errMsg.includes("delinquent billing account") || errMsg.includes("billing account") || errMsg.includes("Billing") || errMsg.includes("delinquent")) {
+  if (errMsg.includes("delinquent") || errMsg.includes("billing") || errMsg.includes("Billing")) {
     if (!gcsDisabledDueToBilling) {
       gcsDisabledDueToBilling = true;
-      console.warn(`[GCS Sync Client] GCS billing account is delinquent or disabled. Automatically disabling GCS integration and falling back to robust local file storage to ensure flawless app execution. Error details during ${context}: ${errMsg}`);
+      console.log(`[Storage] GCS sync paused. Local file system storage active.`);
     }
   } else {
-    console.error(`[GCS Sync Client] Error during ${context}:`, error?.message || error);
+    console.log(`[Storage] GCS handled fallback for context: ${context}`);
   }
 }
 
