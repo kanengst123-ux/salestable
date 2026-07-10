@@ -174,6 +174,10 @@ const ProductImage: React.FC<{
             // Opaque responses can't be read as blob, so serve them directly from cache via image source URL
             if (matched.type === "opaque") {
               setCachedUrl(imgSrc);
+              if (typeof window !== "undefined") {
+                (window as any).__RESOLVED_IMAGES__ = (window as any).__RESOLVED_IMAGES__ || {};
+                (window as any).__RESOLVED_IMAGES__[id] = imgSrc;
+              }
               return;
             }
             try {
@@ -181,11 +185,19 @@ const ProductImage: React.FC<{
               if (active) {
                 objectUrl = URL.createObjectURL(blob);
                 setCachedUrl(objectUrl);
+                if (typeof window !== "undefined") {
+                  (window as any).__RESOLVED_IMAGES__ = (window as any).__RESOLVED_IMAGES__ || {};
+                  (window as any).__RESOLVED_IMAGES__[id] = imgSrc;
+                }
                 return;
               }
             } catch (blobErr) {
               // Fallback to setting directly, which lets Service Worker handle it offline
               setCachedUrl(imgSrc);
+              if (typeof window !== "undefined") {
+                (window as any).__RESOLVED_IMAGES__ = (window as any).__RESOLVED_IMAGES__ || {};
+                (window as any).__RESOLVED_IMAGES__[id] = imgSrc;
+              }
               return;
             }
           }
@@ -217,6 +229,10 @@ const ProductImage: React.FC<{
   };
 
   const handleImgLoad = async () => {
+    if (typeof window !== "undefined" && imgSrc) {
+      (window as any).__RESOLVED_IMAGES__ = (window as any).__RESOLVED_IMAGES__ || {};
+      (window as any).__RESOLVED_IMAGES__[id] = imgSrc;
+    }
     // Cache the loaded source if loaded natively so it's cached on the device for next time
     if (imgSrc && !cachedUrl && typeof window !== "undefined" && "caches" in window) {
       try {
@@ -416,6 +432,7 @@ export default function App() {
   const [cacheCount, setCacheCount] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
   const [isPreviewingPdfPrint, setIsPreviewingPdfPrint] = useState<boolean>(false);
+  const [publicImageFiles, setPublicImageFiles] = useState<Set<string>>(new Set());
 
   // Group products by top category for Catalog and PDF generation
   const productsByCategory = useMemo(() => {
@@ -543,14 +560,56 @@ export default function App() {
 
       let fontAdded = false;
       try {
-        const fontUrl = "https://cdn.jsdelivr.net/npm/noto-sans-tc-subset@1.0.0/NotoSansTC-Regular.ttf";
-        const res = await fetch(fontUrl);
-        if (res.ok) {
+        let fontUrl = "https://fonts.gstatic.com/s/notosanstc/v39/-nFuOG829Oofr2wohFbTp9ifNAn722rq0MXz76Cy_Co.ttf";
+        
+        try {
+          const cssRes = await fetch("https://fonts.googleapis.com/css2?family=Noto+Sans+TC");
+          if (cssRes.ok) {
+            const cssText = await cssRes.text();
+            const match = cssText.match(/url\((https:\/\/fonts\.gstatic\.com\/[^\)]+\.ttf)\)/);
+            if (match && match[1]) {
+              fontUrl = match[1];
+              console.log("Dynamically resolved Noto Sans TC TTF URL:", fontUrl);
+            }
+          }
+        } catch (cssErr) {
+          console.warn("Could not dynamically resolve latest Noto Sans TC from Google CSS API, falling back to static gstatic URL:", cssErr);
+        }
+        
+        let res;
+        if (typeof window !== "undefined" && "caches" in window) {
+          try {
+            const cache = await caches.open("product-images-v1");
+            const matched = await cache.match(fontUrl);
+            if (matched) {
+              res = matched;
+              console.log("NotoSansTC font loaded from browser Cache Storage.");
+            }
+          } catch (cacheErr) {
+            console.warn("Error reading font from cache:", cacheErr);
+          }
+        }
+
+        if (!res) {
+          res = await fetch(fontUrl);
+          if (res.ok && typeof window !== "undefined" && "caches" in window) {
+            try {
+              const cache = await caches.open("product-images-v1");
+              await cache.put(fontUrl, res.clone());
+              console.log("NotoSansTC font saved to browser Cache Storage.");
+            } catch (cacheErr) {
+              console.warn("Error saving font to cache:", cacheErr);
+            }
+          }
+        }
+
+        if (res && res.ok) {
           const buffer = await res.arrayBuffer();
           const bytes = new Uint8Array(buffer);
           let binary = "";
-          for (let i = 0; i < bytes.byteLength; i++) {
-            binary += String.fromCharCode(bytes[i]);
+          const chunk = 0xffff; // 64k chunks for high performance converting without stack overflow
+          for (let i = 0; i < bytes.length; i += chunk) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk) as any);
           }
           const base64Font = window.btoa(binary);
           
@@ -558,17 +617,179 @@ export default function App() {
           doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "normal");
           doc.setFont("NotoSansTC");
           fontAdded = true;
-          console.log("NotoSansTC font loaded inside jsPDF successfully.");
+          console.log("Full NotoSansTC font loaded inside jsPDF successfully.");
         }
       } catch (err) {
-        console.warn("Could not fetch subset Chinese font offline, using Helvetica fallback", err);
+        console.warn("Could not fetch complete Chinese font, using Helvetica fallback", err);
       }
 
       if (!fontAdded) {
         doc.setFont("helvetica", "normal");
       }
 
+      // Helper to convert blob to base64 with canvas-based downscaling (reduces PDF size from 1GB to 25MB for 1800+ items!)
+      const blobToBase64 = (blob: Blob): Promise<string> => {
+        return new Promise((resolve) => {
+          const img = new Image();
+          const url = URL.createObjectURL(blob);
+          img.onload = () => {
+            URL.revokeObjectURL(url);
+            let width = img.width;
+            let height = img.height;
+
+            // Target dimensions (42x25mm grid means ~300x180px is perfectly crisp for printing at high DPI)
+            const maxWidth = 300;
+            const maxHeight = 180;
+
+            if (width > maxWidth) {
+              height = Math.round((height * maxWidth) / width);
+              width = maxWidth;
+            }
+            if (height > maxHeight) {
+              width = Math.round((width * maxHeight) / height);
+              height = maxHeight;
+            }
+
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.drawImage(img, 0, 0, width, height);
+              const dataUrl = canvas.toDataURL("image/jpeg", 0.75); // 0.75 quality is perfectly clear for 42x25mm
+              if (dataUrl && dataUrl.includes(",")) {
+                resolve(dataUrl.split(",")[1]);
+              } else {
+                resolve("");
+              }
+            } else {
+              // fallback if canvas context fails
+              const reader = new FileReader();
+              reader.onloadend = () => {
+                const result = reader.result as string;
+                resolve(result && result.includes(",") ? result.split(",")[1] : "");
+              };
+              reader.readAsDataURL(blob);
+            }
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(url);
+            // fallback if image loading fails
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const result = reader.result as string;
+              resolve(result && result.includes(",") ? result.split(",")[1] : "");
+            };
+            reader.readAsDataURL(blob);
+          };
+          img.src = url;
+        });
+      };
+
+      // Helper to resolve product image from browser cache or fallback URL
+      const getProductImageBase64 = async (product: Product): Promise<{ base64: string, format: string } | null> => {
+        // Check memory cache first to instantly bypass network/cache hits if resolved before
+        if (typeof window !== "undefined") {
+          (window as any).__RESOLVED_BASE64_CACHE__ = (window as any).__RESOLVED_BASE64_CACHE__ || {};
+          const cached = (window as any).__RESOLVED_BASE64_CACHE__[product.id];
+          if (cached) {
+            return cached;
+          }
+        }
+
+        const cleanId = product.id.replace(/^(id[-_])?/i, "");
+        const fallbackRaw = product.extraAttributes?.["Image URLs"]?.trim() || "";
+        const fallbackUrls = fallbackRaw.split(/[,\n]/).map(u => u.trim()).filter(Boolean);
+
+        // 1. Check if we already have a runtime resolved working URL for this product
+        const resolvedUrl = typeof window !== "undefined" ? (window as any).__RESOLVED_IMAGES__?.[product.id] : null;
+
+        const candidateUrls: string[] = [];
+        if (resolvedUrl) {
+          candidateUrls.push(resolvedUrl);
+        } else {
+          // Check if local public files exist first (O(1) lookups using publicImageFiles)
+          const local1 = `id-${cleanId}.jpg`;
+          const local2 = `${product.id}.jpg`;
+          
+          if (publicImageFiles.has(local1)) {
+            candidateUrls.push(`/${local1}`);
+          }
+          if (publicImageFiles.has(local2)) {
+            candidateUrls.push(`/${local2}`);
+          }
+          
+          // Only use fallback external URLs if no local files matched (avoids 404s completely)
+          if (candidateUrls.length === 0) {
+            candidateUrls.push(...fallbackUrls);
+          }
+        }
+
+        if (candidateUrls.length === 0) {
+          return null;
+        }
+
+        for (const url of candidateUrls) {
+          try {
+            // A. Try Cache API first (extremely fast and fully offline)
+            if (typeof window !== "undefined" && "caches" in window) {
+              const cache = await caches.open("product-images-v1");
+              const matched = await cache.match(url, { ignoreSearch: true });
+              if (matched) {
+                const contentType = matched.headers.get("content-type");
+                if (!contentType || !contentType.includes("text/html")) {
+                  const blob = await matched.blob();
+                  const b64 = await blobToBase64(blob);
+                  if (b64) {
+                    const format = url.toLowerCase().endsWith(".png") ? "PNG" : "JPEG";
+                    const resObj = { base64: b64, format };
+                    // Remember this URL as working!
+                    if (typeof window !== "undefined") {
+                      (window as any).__RESOLVED_IMAGES__ = (window as any).__RESOLVED_IMAGES__ || {};
+                      (window as any).__RESOLVED_IMAGES__[product.id] = url;
+                      (window as any).__RESOLVED_BASE64_CACHE__ = (window as any).__RESOLVED_BASE64_CACHE__ || {};
+                      (window as any).__RESOLVED_BASE64_CACHE__[product.id] = resObj;
+                    }
+                    return resObj;
+                  }
+                }
+              }
+            }
+
+            // B. Try fetching directly
+            const response = await fetch(url);
+            if (response.ok) {
+              const contentType = response.headers.get("content-type");
+              if (!contentType || !contentType.includes("text/html")) {
+                const blob = await response.blob();
+                const b64 = await blobToBase64(blob);
+                if (b64) {
+                  const format = url.toLowerCase().endsWith(".png") ? "PNG" : "JPEG";
+                  const resObj = { base64: b64, format };
+                  // Remember this URL as working!
+                  if (typeof window !== "undefined") {
+                    (window as any).__RESOLVED_IMAGES__ = (window as any).__RESOLVED_IMAGES__ || {};
+                    (window as any).__RESOLVED_IMAGES__[product.id] = url;
+                    (window as any).__RESOLVED_BASE64_CACHE__ = (window as any).__RESOLVED_BASE64_CACHE__ || {};
+                    (window as any).__RESOLVED_BASE64_CACHE__[product.id] = resObj;
+                  }
+                  return resObj;
+                }
+              }
+            }
+          } catch (err) {
+            // Continue trying next pattern
+          }
+        }
+        return null;
+      };
+
       // 1. Cover Page
+      if (fontAdded) {
+        doc.setFont("NotoSansTC", "normal");
+      } else {
+        doc.setFont("helvetica", "normal");
+      }
       doc.setFillColor(15, 23, 42); // slate-900 background
       doc.rect(0, 0, 210, 297, "F");
 
@@ -586,121 +807,321 @@ export default function App() {
       doc.text(`產出日期: ${nowStr} | 共 ${products.length} 款商品`, 105, 240, { align: "center" });
       doc.text("支援完全離線查閱，隨時隨地，快速詢價", 105, 250, { align: "center" });
 
+      // Sort products by category so that consecutive cards are grouped beautifully
+      const sortedProducts = [...products].sort((a, b) => {
+        const catA = a.extraAttributes?.["Categories"] || "其他分類";
+        const catB = b.extraAttributes?.["Categories"] || "其他分類";
+        return catA.localeCompare(catB, "zh-HK");
+      });
+
+      // Parallel batch image resolver loop with real-time UI updates
+      const processedProducts: { product: Product, imgData: string | null, format: string | null }[] = [];
+      const batchSize = 15;
+      
+      showToast(`正在產生商品目錄 PDF... (共 ${sortedProducts.length} 款商品)`);
+      
+      for (let i = 0; i < sortedProducts.length; i += batchSize) {
+        const batch = sortedProducts.slice(i, i + batchSize);
+        showToast(`正在下載並處理商品圖片 (${Math.min(i + batchSize, sortedProducts.length)}/${sortedProducts.length})...`);
+        
+        const results = await Promise.all(
+          batch.map(async (p) => {
+            try {
+              const imgResult = await getProductImageBase64(p);
+              return {
+                product: p,
+                imgData: imgResult ? imgResult.base64 : null,
+                format: imgResult ? imgResult.format : null
+              };
+            } catch (err) {
+              return { product: p, imgData: null, format: null };
+            }
+          })
+        );
+        processedProducts.push(...results);
+      }
+
+      // Group bookmarks by category and their page numbers
+      const productsPerPage = 20;
+      const totalPages = Math.ceil(processedProducts.length / productsPerPage);
+      const categoryPageMap: Record<string, number> = {};
+      
+      processedProducts.forEach((item, index) => {
+        const catName = item.product.extraAttributes?.["Categories"] || "其他分類";
+        const pageIdx = Math.floor(index / productsPerPage);
+        const actualPageNum = pageIdx + 2; // cover is page 1, product grid starts at page 2
+        if (categoryPageMap[catName] === undefined) {
+          categoryPageMap[catName] = actualPageNum;
+        }
+      });
+
       // Create outline bookmarks root
       const outline = doc.outline;
       let categoriesParent = null;
       if (outline) {
         categoriesParent = outline.add(null, fontAdded ? "商品分類" : "Categories", { pageNumber: 1 });
+        Object.entries(categoryPageMap).forEach(([catName, pageNumVal]) => {
+          outline.add(categoriesParent, catName, { pageNumber: pageNumVal });
+        });
       }
 
-      // 2. Loop categories and list products
-      const cats = Object.keys(productsByCategory);
+      // 2. Render Product Catalog Grid (4 x 5 per page)
       let pageNum = 1;
 
-      cats.forEach((catName, catIdx) => {
+      for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
         doc.addPage();
         pageNum++;
 
-        if (outline && categoriesParent) {
-          outline.add(categoriesParent, catName, { pageNumber: pageNum });
+        if (fontAdded) {
+          doc.setFont("NotoSansTC", "normal");
+        } else {
+          doc.setFont("helvetica", "normal");
         }
 
-        // Category Page style
-        doc.setFillColor(248, 250, 252); // slate-50
-        doc.rect(0, 0, 210, 25, "F");
-
-        doc.setFillColor(79, 70, 229); // indigo-600
-        doc.rect(15, 8, 3, 10, "F");
-
-        doc.setFontSize(16);
+        // Draw elegant page header
+        doc.setFontSize(10);
         doc.setTextColor(15, 23, 42); // slate-900
-        doc.text(catName, 22, 16);
-
-        doc.setFontSize(9);
+        doc.text("商品目錄 / Product Catalog", 12, 12);
+        
+        doc.setFontSize(8);
         doc.setTextColor(100, 116, 139); // slate-500
-        doc.text(`分類編號: ${catIdx + 1} | 頁碼: ${pageNum}`, 195, 15, { align: "right" });
+        doc.text(`Price Tier: ${selectedPriceTier} 系列 | 產出日期: ${nowStr}`, 105, 12, { align: "center" });
+        doc.text(`頁碼: ${pageNum} / ${totalPages + 1}`, 198, 12, { align: "right" });
 
-        // Table Header
-        let y = 38;
-        doc.setFillColor(241, 245, 249); // slate-100
-        doc.rect(15, y - 5, 180, 8, "F");
+        // Divider line
+        doc.setDrawColor(226, 232, 240);
+        doc.setLineWidth(0.3);
+        doc.line(10.5, 15, 199.5, 15);
 
-        doc.setFontSize(9);
-        doc.setTextColor(71, 85, 105); // slate-600
-        doc.text("編號 / ID", 18, y);
-        doc.text("商品名稱 / Name", 45, y);
-        doc.text("單價 / Price", 145, y, { align: "right" });
-        doc.text("庫存 / Stock", 180, y, { align: "center" });
+        const startIndex = pageIdx * productsPerPage;
+        const pageProducts = processedProducts.slice(startIndex, startIndex + productsPerPage);
 
-        y += 8;
+        pageProducts.forEach((item, index) => {
+          const row = Math.floor(index / 4);
+          const col = index % 4;
+          const cx = 10.5 + col * (45 + 3);
+          const cy = 20 + row * (50 + 3);
 
-        const catProds = productsByCategory[catName];
-        catProds.forEach((p, idx) => {
-          if (y > 270) {
-            doc.addPage();
-            pageNum++;
-            
+          const p = item.product;
+          const isOutOfStock = !p.hasStock;
+
+          // 1. Card Frame
+          if (isOutOfStock) {
+            doc.setDrawColor(203, 213, 225); // muted slate-300 border
+            doc.setLineWidth(0.35);
+            doc.setFillColor(248, 250, 252); // light slate-50 card body
+          } else {
+            doc.setDrawColor(28, 49, 115); // brand navy border
+            doc.setLineWidth(0.35);
+            doc.setFillColor(255, 255, 255); // white card body
+          }
+          doc.roundedRect(cx, cy, 45, 50, 2.5, 2.5, "FD");
+
+          // 2. Image inside Card
+          if (item.imgData) {
+            try {
+              doc.addImage(item.imgData, item.format || "JPEG", cx + 1.5, cy + 1.5, 42, 25);
+              
+              // Draw semi-transparent grey overlay for out-of-stock items
+              if (isOutOfStock) {
+                try {
+                  const gState = new (doc as any).GState({ opacity: 0.55 });
+                  doc.setGState(gState);
+                  doc.setFillColor(220, 225, 230); // light slate overlay
+                  doc.rect(cx + 1.5, cy + 1.5, 42, 25, "F");
+                  doc.setGState(new (doc as any).GState({ opacity: 1.0 })); // reset
+                } catch (gStateErr) {
+                  // Fallback: draw light solid rectangle if GState is not available
+                  doc.setFillColor(241, 245, 249);
+                }
+              }
+
+              // Draw thin border over the image
+              doc.setDrawColor(226, 232, 240);
+              doc.setLineWidth(0.15);
+              doc.roundedRect(cx + 1.5, cy + 1.5, 42, 25, 1.5, 1.5, "S");
+            } catch (imgErr) {
+              // Draw placeholder on failure
+              doc.setFillColor(248, 250, 252);
+              doc.setDrawColor(226, 232, 240);
+              doc.setLineWidth(0.2);
+              doc.roundedRect(cx + 1.5, cy + 1.5, 42, 25, 1.5, 1.5, "FD");
+              doc.setTextColor(148, 163, 184);
+              doc.setFontSize(7);
+              doc.text("[ 圖片載入失敗 ]", cx + 22.5, cy + 14.5, { align: "center" });
+            }
+          } else {
+            // Draw default placeholder
             doc.setFillColor(248, 250, 252);
-            doc.rect(0, 0, 210, 20, "F");
-            doc.setFontSize(11);
-            doc.setTextColor(15, 23, 42);
-            doc.text(`${catName} (續)`, 15, 13);
-            doc.setFontSize(9);
-            doc.text(`頁碼: ${pageNum}`, 195, 13, { align: "right" });
-
-            // Table Header on new page
-            y = 30;
-            doc.setFillColor(241, 245, 249);
-            doc.rect(15, y - 5, 180, 8, "F");
-            doc.setTextColor(71, 85, 105);
-            doc.text("編號 / ID", 18, y);
-            doc.text("商品名稱 / Name", 45, y);
-            doc.text("單價 / Price", 145, y, { align: "right" });
-            doc.text("庫存 / Stock", 180, y, { align: "center" });
-            
-            y += 8;
+            doc.setDrawColor(226, 232, 240);
+            doc.setLineWidth(0.2);
+            doc.roundedRect(cx + 1.5, cy + 1.5, 42, 25, 1.5, 1.5, "FD");
+            doc.setTextColor(148, 163, 184);
+            doc.setFontSize(7);
+            doc.text("[ 暫無圖片 ]", cx + 22.5, cy + 14.5, { align: "center" });
           }
 
-          // Row background alternation
-          if (idx % 2 === 1) {
-            doc.setFillColor(250, 250, 250);
-            doc.rect(15, y - 4, 180, 6.5, "F");
-          }
-
-          doc.setFontSize(8.5);
-          doc.setTextColor(15, 23, 42);
-
-          // ID
-          doc.text(p.id, 18, y);
-
-          // Name (truncate for safe padding alignment)
-          const maxNameLen = fontAdded ? 25 : 35;
-          let displayName = p.name;
-          if (displayName.length > maxNameLen) {
-            displayName = displayName.substring(0, maxNameLen) + "...";
-          }
-          doc.text(displayName, 45, y);
-
-          // Price
-          const priceVal = parseFloat(getProductPrice(p));
-          let priceStr = "詢價決定";
-          if (priceVal > 0) {
-            priceStr = `HK$${priceVal.toFixed(2)}`;
-          }
-          doc.text(priceStr, 145, y, { align: "right" });
-
-          // Stock status
-          let stockStr = "有現貨";
+          // 3. Stock Status Badge (top-left over image)
+          let badgeText = "有現貨";
+          let badgeBg = [245, 158, 11]; // orange
           if (p.alwaysStock) {
-            stockStr = "長期充足";
+            badgeText = "長期充足";
+            badgeBg = [16, 185, 129]; // green
           } else if (!p.hasStock) {
-            stockStr = "無現貨";
+            badgeText = "暫無現貨";
+            badgeBg = [148, 163, 184]; // grey
+          } else if (p.secondaryStockCount) {
+            badgeText = `有現貨 (${p.secondaryStockCount})`;
           }
-          doc.text(stockStr, 180, y, { align: "center" });
 
-          y += 6.5;
+          // Draw Stock Pill
+          doc.setFillColor(badgeBg[0], badgeBg[1], badgeBg[2]);
+          doc.roundedRect(cx + 2.5, cy + 2.5, 16, 4, 1, 1, "F");
+          doc.setTextColor(255, 255, 255);
+          doc.setFontSize(5.5);
+          doc.text(badgeText, cx + 10.5, cy + 5.2, { align: "center" });
+
+          // 4. Product ID
+          doc.setFontSize(6);
+          if (isOutOfStock) {
+            doc.setTextColor(156, 163, 175); // grey-400
+          } else {
+            doc.setTextColor(100, 116, 139); // slate-500
+          }
+          doc.text(`編號: ${p.id}`, cx + 2.5, cy + 29.5);
+
+          // 5. Product Name (wrap across up to 2 lines)
+          doc.setFontSize(7.5);
+          if (isOutOfStock) {
+            doc.setTextColor(156, 163, 175); // grey-400
+          } else {
+            doc.setTextColor(15, 23, 42); // slate-900
+          }
+          const wrappedName = doc.splitTextToSize(p.name, 40);
+          const line1 = wrappedName[0] || "";
+          let line2 = wrappedName[1] || "";
+          if (wrappedName.length > 2) {
+            line2 = line2.substring(0, Math.max(0, line2.length - 2)) + "...";
+          }
+          doc.text(line1, cx + 2.5, cy + 33.5);
+          if (line2) {
+            doc.text(line2, cx + 2.5, cy + 36.7);
+          }
+
+          // 6. Category Pill Badge
+          let catText = p.extraAttributes?.["Categories"] || "其他分類";
+          if (catText.length > 12) {
+            catText = catText.substring(0, 11) + "...";
+          }
+          if (isOutOfStock) {
+            doc.setFillColor(243, 244, 246); // grey-100
+            doc.setDrawColor(229, 231, 235); // grey-200 border
+            doc.setLineWidth(0.15);
+            doc.roundedRect(cx + 2.5, cy + 40, 16, 3.2, 0.5, 0.5, "FD");
+            doc.setTextColor(156, 163, 175); // grey-400
+          } else {
+            doc.setFillColor(239, 246, 255); // soft blue-50
+            doc.setDrawColor(219, 234, 254); // blue-100 border
+            doc.setLineWidth(0.15);
+            doc.roundedRect(cx + 2.5, cy + 40, 16, 3.2, 0.5, 0.5, "FD");
+            doc.setTextColor(79, 70, 229); // indigo-600
+          }
+          doc.setFontSize(5.5);
+          doc.text(catText, cx + 10.5, cy + 42.3, { align: "center" });
+
+          // 7. Price Label and Price
+          if (isOutOfStock) {
+            doc.setTextColor(209, 213, 219); // grey-300
+          } else {
+            doc.setTextColor(148, 163, 184); // slate-400
+          }
+          doc.setFontSize(5.5);
+          doc.text("售價", cx + 2.5, cy + 46);
+
+          if (isOutOfStock) {
+            doc.setTextColor(156, 163, 175); // grey-400
+          } else {
+            doc.setTextColor(15, 23, 42); // slate-900
+          }
+          doc.setFontSize(8.5);
+          const priceVal = parseFloat(getProductPrice(p));
+          const priceStr = priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "價格由詢問決定";
+          doc.text(priceStr, cx + 2.5, cy + 49.2);
+
+          // Price Tier Label Square next to price
+          if (priceVal > 0) {
+            const priceWidth = doc.getTextWidth(priceStr);
+            const x_tier = cx + 2.5 + priceWidth + 1.2;
+            const y_tier = cy + 46.8;
+            if (isOutOfStock) {
+              doc.setFillColor(243, 244, 246); // grey-100
+              doc.setDrawColor(229, 231, 235); // grey-200 border
+              doc.setLineWidth(0.15);
+              doc.roundedRect(x_tier, y_tier, 3, 3, 0.3, 0.3, "FD");
+              doc.setTextColor(156, 163, 175); // grey-400
+            } else {
+              doc.setFillColor(239, 246, 255); // slate-50/blue-50
+              doc.setDrawColor(191, 219, 254); // blue-200 border
+              doc.setLineWidth(0.15);
+              doc.roundedRect(x_tier, y_tier, 3, 3, 0.3, 0.3, "FD");
+              doc.setTextColor(37, 99, 235); // blue-600
+            }
+            doc.setFontSize(5.5);
+            doc.text(selectedPriceTier, x_tier + 1.5, y_tier + 2.2, { align: "center" });
+          }
+
+          // 8. Visual Vector Cart Button (bottom-right)
+          const cartCX = cx + 40.5;
+          const cartCY = cy + 45.5;
+          if (isOutOfStock) {
+            doc.setFillColor(249, 250, 251); // extremely light off-white
+            doc.setDrawColor(243, 244, 246); // soft gray border
+            doc.setLineWidth(0.2);
+            doc.circle(cartCX, cartCY, 2.5, "FD");
+
+            // Vector Shopping Cart Outline (Muted Grey)
+            doc.setDrawColor(209, 213, 219); // grey-300
+            doc.setLineWidth(0.15);
+            // Basket bottom
+            doc.line(cartCX - 1.0, cartCY + 0.6, cartCX + 0.5, cartCY + 0.6);
+            // Basket back
+            doc.line(cartCX - 1.0, cartCY + 0.6, cartCX - 1.5, cartCY - 0.8);
+            // Basket front
+            doc.line(cartCX + 0.5, cartCY + 0.6, cartCX + 1.0, cartCY - 0.8);
+            // Basket top
+            doc.line(cartCX - 1.5, cartCY - 0.8, cartCX + 1.0, cartCY - 0.8);
+            // Handle
+            doc.line(cartCX - 1.5, cartCY - 0.8, cartCX - 1.9, cartCY - 0.8);
+            // Wheels
+            doc.setFillColor(209, 213, 219);
+            doc.circle(cartCX - 0.8, cartCY + 1.1, 0.25, "F");
+            doc.circle(cartCX + 0.3, cartCY + 1.1, 0.25, "F");
+          } else {
+            doc.setFillColor(255, 255, 255);
+            doc.setDrawColor(226, 232, 240); // slate-200 border
+            doc.setLineWidth(0.2);
+            doc.circle(cartCX, cartCY, 2.5, "FD");
+
+            // Vector Shopping Cart Outline
+            doc.setDrawColor(100, 116, 139); // slate-500
+            doc.setLineWidth(0.15);
+            // Basket bottom
+            doc.line(cartCX - 1.0, cartCY + 0.6, cartCX + 0.5, cartCY + 0.6);
+            // Basket back
+            doc.line(cartCX - 1.0, cartCY + 0.6, cartCX - 1.5, cartCY - 0.8);
+            // Basket front
+            doc.line(cartCX + 0.5, cartCY + 0.6, cartCX + 1.0, cartCY - 0.8);
+            // Basket top
+            doc.line(cartCX - 1.5, cartCY - 0.8, cartCX + 1.0, cartCY - 0.8);
+            // Handle
+            doc.line(cartCX - 1.5, cartCY - 0.8, cartCX - 1.9, cartCY - 0.8);
+            // Wheels
+            doc.setFillColor(100, 116, 139);
+            doc.circle(cartCX - 0.8, cartCY + 1.1, 0.25, "F");
+            doc.circle(cartCX + 0.3, cartCY + 1.1, 0.25, "F");
+          }
         });
-      });
+      }
 
       doc.save(`Product_Catalog_Price_Tier_${selectedPriceTier}.pdf`);
       showToast("PDF 商品目錄導出成功！");
@@ -1144,6 +1565,21 @@ export default function App() {
   useEffect(() => {
     loadProducts();
     fetchServerImages();
+
+    // Fetch local public folder image catalog for high-speed offline check
+    fetch("/api/public-images")
+      .then(res => {
+        if (res.ok) return res.json();
+        throw new Error("Failed to load public images");
+      })
+      .then(data => {
+        if (data && Array.isArray(data.files)) {
+          setPublicImageFiles(new Set(data.files));
+        }
+      })
+      .catch(err => {
+        console.warn("Public images list fetch failed:", err);
+      });
 
     // Fetch Google Sheets Sync settings
     fetch("/api/sheet-settings")

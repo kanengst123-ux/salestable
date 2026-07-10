@@ -13,6 +13,19 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 // Google Cloud Storage S3 Compatible HMAC configuration
 const bucketName = process.env.GCS_BUCKET_NAME || "my-product-catalog-images";
 let s3Client: S3Client | null = null;
+let gcsDisabledDueToBilling = false;
+
+function handleGcsError(error: any, context: string) {
+  const errMsg = error?.message || "";
+  if (errMsg.includes("delinquent billing account") || errMsg.includes("billing account") || errMsg.includes("Billing") || errMsg.includes("delinquent")) {
+    if (!gcsDisabledDueToBilling) {
+      gcsDisabledDueToBilling = true;
+      console.warn(`[GCS Sync Client] GCS billing account is delinquent or disabled. Automatically disabling GCS integration and falling back to robust local file storage to ensure flawless app execution. Error details during ${context}: ${errMsg}`);
+    }
+  } else {
+    console.error(`[GCS Sync Client] Error during ${context}:`, error?.message || error);
+  }
+}
 
 if (process.env.GCS_ACCESS_KEY && process.env.GCS_SECRET_KEY) {
   s3Client = new S3Client({
@@ -373,6 +386,20 @@ app.post("/api/sheet-settings", (req, res) => {
   }
 });
 
+app.get("/api/public-images", (req, res) => {
+  try {
+    const publicDir = path.join(process.cwd(), "public");
+    if (fs.existsSync(publicDir)) {
+      const files = fs.readdirSync(publicDir);
+      res.json({ files });
+    } else {
+      res.json({ files: [] });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to list public images" });
+  }
+});
+
 app.post("/api/upload-image", async (req, res) => {
   try {
     const { filename, base64 } = req.body;
@@ -400,7 +427,7 @@ app.post("/api/upload-image", async (req, res) => {
     // Save locally as quick-access cache / fallback
     fs.writeFileSync(filePath, buffer);
 
-    if (s3Client) {
+    if (s3Client && !gcsDisabledDueToBilling) {
       try {
         console.log(`[GCS Sync Client] Initiating bucket upload for: ${safeFilename}`);
         const command = new PutObjectCommand({
@@ -412,7 +439,7 @@ app.post("/api/upload-image", async (req, res) => {
         await s3Client.send(command);
         console.log(`[GCS Sync Client] Successfully uploaded to GCS: ${safeFilename}`);
       } catch (gcsError: any) {
-        console.error("[GCS Sync Client] GCS upload failed, fell back to local-only:", gcsError);
+        handleGcsError(gcsError, "upload-image");
       }
     } else {
       console.log(`Saved customer product image locally: ${safeFilename}`);
@@ -606,7 +633,7 @@ app.get("/api/products", async (req, res) => {
 
 app.get("/api/uploaded-images", async (req, res) => {
   try {
-    if (s3Client) {
+    if (s3Client && !gcsDisabledDueToBilling) {
       try {
         console.log(`[GCS Sync Client] Listing objects in GCS bucket: ${bucketName}`);
         const command = new ListObjectsV2Command({
@@ -626,7 +653,7 @@ app.get("/api/uploaded-images", async (req, res) => {
         console.log(`[GCS Sync Client] GCS listed ${images.length} files successfully.`);
         return res.json({ images });
       } catch (gcsError: any) {
-        console.error("[GCS Sync Client] GCS Listing failed, attempting local fallback listing:", gcsError);
+        handleGcsError(gcsError, "list-images");
       }
     }
 
@@ -668,7 +695,7 @@ app.delete("/api/uploaded-images/:filename", async (req, res) => {
     const filePath = path.join(publicDir, safeFilename);
 
     let deletedFromGcs = false;
-    if (s3Client) {
+    if (s3Client && !gcsDisabledDueToBilling) {
       try {
         console.log(`[GCS Sync Client] Deleting from GCS bucket: ${safeFilename}`);
         const command = new DeleteObjectCommand({
@@ -679,7 +706,7 @@ app.delete("/api/uploaded-images/:filename", async (req, res) => {
         deletedFromGcs = true;
         console.log(`[GCS Sync Client] Successfully deleted from GCS: ${safeFilename}`);
       } catch (gcsError: any) {
-        console.error("[GCS Sync Client] GCS deletion failed:", gcsError);
+        handleGcsError(gcsError, "delete-image");
       }
     }
 
@@ -708,7 +735,7 @@ app.get(["/:filename", "/products/:filename", "/images/:filename"], async (req, 
   }
 
   // 1. Try Google Cloud Storage first if enabled
-  if (s3Client) {
+  if (s3Client && !gcsDisabledDueToBilling) {
     try {
       const command = new GetObjectCommand({
         Bucket: bucketName,
@@ -728,7 +755,7 @@ app.get(["/:filename", "/products/:filename", "/images/:filename"], async (req, 
       }
     } catch (gcsError: any) {
       if (gcsError.name !== "NoSuchKey" && gcsError.name !== "NotFound") {
-        console.error("[GCS Sync Client] GCS fetch error (falling back to local):", gcsError.message);
+        handleGcsError(gcsError, "fetch-image");
       }
     }
   }
@@ -745,7 +772,7 @@ app.get(["/:filename", "/products/:filename", "/images/:filename"], async (req, 
     const stats = fs.statSync(exactPath);
     if (stats.size > 0) {
       // Background sync accurate local file to GCS
-      if (s3Client) {
+      if (s3Client && !gcsDisabledDueToBilling) {
         fs.readFile(exactPath, (err, data) => {
           if (!err && data && s3Client) {
             const uploadCmd = new PutObjectCommand({
@@ -757,7 +784,7 @@ app.get(["/:filename", "/products/:filename", "/images/:filename"], async (req, 
             s3Client.send(uploadCmd).then(() => {
               console.log(`[GCS Sync Client] Progressively synced local historical file to GCS: ${filename}`);
             }).catch(e => {
-              console.error("[GCS Sync Client] Background auto-sync failed:", e.message);
+              handleGcsError(e, "background-sync-1");
             });
           }
         });
@@ -787,7 +814,7 @@ app.get(["/:filename", "/products/:filename", "/images/:filename"], async (req, 
 
       if (bestMatch) {
         // If bestMatch exists and s3Client is initialized, we can asynchronously upload it to GCS for future instant serving!
-        if (s3Client) {
+        if (s3Client && !gcsDisabledDueToBilling) {
           const localMatchPath = path.join(publicDir, bestMatch);
           fs.readFile(localMatchPath, (err, data) => {
             if (!err && data && s3Client) {
@@ -800,7 +827,7 @@ app.get(["/:filename", "/products/:filename", "/images/:filename"], async (req, 
               s3Client.send(uploadCmd).then(() => {
                 console.log(`[GCS Sync Client] Progressively synced local historical file to GCS: ${bestMatch}`);
               }).catch(e => {
-                console.error("[GCS Sync Client] Background auto-sync failed:", e.message);
+                handleGcsError(e, "background-sync-2");
               });
             }
           });

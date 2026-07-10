@@ -1,6 +1,6 @@
 {
-  "name": "Product Catalog",
-  "description": "An interactive, searchable customer product catalog with real-time Google Sheet stock counts and pricing details.",
+  "name": "Interactive Product Catalog",
+  "description": "An interactive product catalog and sales order management tool with PDF generation.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
