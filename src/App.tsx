@@ -440,7 +440,8 @@ export default function App() {
   // Group products by top category for Catalog and PDF generation
   const productsByCategory = useMemo(() => {
     const groups: Record<string, Product[]> = {};
-    products.forEach(p => {
+    const costProducts = products.filter(p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "");
+    costProducts.forEach(p => {
       const cat = p.costCategoryName?.trim() || p.extraAttributes?.["Categories"]?.split("/")[0]?.trim() || "其他分類";
       if (!groups[cat]) {
         groups[cat] = [];
@@ -449,6 +450,10 @@ export default function App() {
     });
     return groups;
   }, [products]);
+
+  const catalogProductsCount = useMemo(() => {
+    return (Object.values(productsByCategory) as Product[][]).reduce((acc, curr) => acc + curr.length, 0);
+  }, [productsByCategory]);
 
   // One-click background cache downloader with progress tracking
   const handlePrecacheAllImages = async () => {
@@ -822,14 +827,16 @@ export default function App() {
       doc.setTextColor(226, 232, 240); // slate-200
       doc.text(`Price Tier: ${selectedPriceTier} 系列`, 105, 120, { align: "center" });
 
+      const costTabProducts = products.filter(p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "");
+
       doc.setFontSize(10);
       doc.setTextColor(148, 163, 184); // slate-400
       const nowStr = new Date().toLocaleDateString("zh-TW", { year: "numeric", month: "long", day: "numeric" });
-      doc.text(`產出日期: ${nowStr} | 共 ${products.length} 款商品`, 105, 240, { align: "center" });
+      doc.text(`產出日期: ${nowStr} | 共 ${costTabProducts.length} 款商品`, 105, 240, { align: "center" });
       doc.text("支援完全離線查閱，隨時隨地，快速詢價", 105, 250, { align: "center" });
 
       // Sort products by category so that consecutive cards are grouped beautifully
-      const sortedProducts = [...products].sort((a, b) => {
+      const sortedProducts = [...costTabProducts].sort((a, b) => {
         const catA = a.costCategoryName || "其他分類";
         const catB = b.costCategoryName || "其他分類";
         return catA.localeCompare(catB, "zh-HK");
@@ -1733,6 +1740,11 @@ export default function App() {
   const processedProducts = useMemo(() => {
     let result = [...products];
 
+    // Restrict customer catalog mode to products in the 'cost' tab of the Google Sheet
+    if (viewMode === "customer") {
+      result = result.filter(p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "");
+    }
+
     // 1. Search Query Filter
     if (searchQuery.trim() !== "") {
       const query = searchQuery.toLowerCase().trim();
@@ -1807,7 +1819,7 @@ export default function App() {
     });
 
     return result;
-  }, [products, searchQuery, selectedParentCategory, selectedSubCategory, stockFilter, sortKey, selectedCostCategoryName, selectedPriceTier]);
+  }, [products, searchQuery, selectedParentCategory, selectedSubCategory, stockFilter, sortKey, selectedCostCategoryName, selectedPriceTier, viewMode]);
 
   // Page Calculations
   const totalPages = 1;
@@ -5004,7 +5016,7 @@ function revertStockForOrders(orderIdsMap) {
 
                   <div className="text-center space-y-2 bg-slate-50 border border-slate-100 rounded-2xl p-6 max-w-md mx-auto">
                     <p className="text-xs text-slate-500 font-bold text-center">同步校對日期：{syncTime || "離線備份資料"}</p>
-                    <p className="text-xs text-slate-400 font-medium text-center">共計 {products.length} 款商品 | {Object.keys(productsByCategory).length} 大分類</p>
+                    <p className="text-xs text-slate-400 font-medium text-center">共計 {catalogProductsCount} 款商品 | {Object.keys(productsByCategory).length} 大分類</p>
                     <p className="text-[10px] text-slate-400 font-medium leading-normal pt-2 border-t border-slate-150 text-center">
                       本目錄包含高畫質商品照片與詳細規格。您可以在手機完全離線時隨時查閱並展示給客戶。
                     </p>
@@ -5095,7 +5107,7 @@ function revertStockForOrders(orderIdsMap) {
 
           <div className="text-center space-y-2 max-w-md mx-auto pt-48">
             <p className="text-sm text-slate-600 font-bold">同步校對日期：{syncTime || "離線備份資料"}</p>
-            <p className="text-xs text-slate-400 font-medium">共計 {products.length} 款商品 | {Object.keys(productsByCategory).length} 大分類</p>
+            <p className="text-xs text-slate-400 font-medium">共計 {catalogProductsCount} 款商品 | {Object.keys(productsByCategory).length} 大分類</p>
             <p className="text-[10px] text-slate-400 font-medium pt-4">
               本產品目錄支援手機完全離線查閱
             </p>
