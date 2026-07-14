@@ -286,6 +286,7 @@ const ProductImage: React.FC<{
 
   return (
     <img
+      key={id}
       src={cachedUrl || imgSrc}
       alt={name}
       onError={handleImgError}
@@ -706,18 +707,37 @@ export default function App() {
         const resolvedUrl = typeof window !== "undefined" ? (window as any).__RESOLVED_IMAGES__?.[product.id] : null;
 
         const candidateUrls: string[] = [];
+        let isValidResolvedUrl = false;
         if (resolvedUrl) {
-          candidateUrls.push(resolvedUrl);
-        } else {
-          // Check if local public files exist first (O(1) lookups using publicImageFiles)
-          const local1 = `id-${cleanId}.jpg`;
-          const local2 = `${product.id}.jpg`;
-          
-          if (publicImageFiles.has(local1)) {
-            candidateUrls.push(`/${local1}`);
+          const lowerUrl = resolvedUrl.toLowerCase();
+          const lowerId = product.id.toLowerCase();
+          const lowerClean = cleanId.toLowerCase();
+          const isLocalMatch = lowerUrl.includes(lowerId) || lowerUrl.includes(lowerClean);
+          const isFallbackMatch = fallbackUrls.some(f => f.toLowerCase() === lowerUrl);
+          if (isLocalMatch || isFallbackMatch) {
+            isValidResolvedUrl = true;
+            candidateUrls.push(resolvedUrl);
           }
-          if (publicImageFiles.has(local2)) {
-            candidateUrls.push(`/${local2}`);
+        }
+
+        if (!isValidResolvedUrl) {
+          // Check all possible flat local image patterns against the public folder file listing Set
+          const possibleLocalFiles = [
+            `id-${cleanId}.jpg`,
+            `id-${cleanId}.jpeg`,
+            `id-${cleanId}.png`,
+            `${product.id}.jpg`,
+            `${product.id}.jpeg`,
+            `${product.id}.png`,
+            `${cleanId}.jpg`,
+            `${cleanId}.jpeg`,
+            `${cleanId}.png`,
+          ];
+          
+          for (const filename of possibleLocalFiles) {
+            if (publicImageFiles.has(filename)) {
+              candidateUrls.push(`/${filename}`);
+            }
           }
           
           // Only use fallback external URLs if no local files matched (avoids 404s completely)
