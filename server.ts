@@ -591,6 +591,83 @@ app.put("/api/products/:id", (req, res) => {
   }
 });
 
+let soldDataCache: Record<string, number> | null = null;
+let lastSoldFetchTime = 0;
+const SOLD_CACHE_DURATION = 60 * 1000; // 60 seconds
+
+async function fetchSoldDataFromSheet() {
+  const now = Date.now();
+  if (soldDataCache && (now - lastSoldFetchTime) < SOLD_CACHE_DURATION) {
+    return soldDataCache;
+  }
+
+  const url = "https://docs.google.com/spreadsheets/d/10gGU4ZZH_qUKwYklfIK0sQFNCUCfUc36C3SpkfUoQlA/export?format=csv";
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Sold Sheet: ${response.statusText}`);
+    }
+    const csvText = await response.text();
+    const rows = parseCSV(csvText);
+
+    if (rows.length < 2) {
+      throw new Error("Sold CSV does not contain sufficient rows");
+    }
+
+    const soldMap: Record<string, number> = {};
+    const dataRows = rows.slice(1);
+    
+    // Calculate reference boundaries based on actual system/local date
+    const currentDate = new Date();
+    const twoWeeksAgo = new Date(currentDate.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+    dataRows.forEach((row) => {
+      if (row.length < 6) return;
+      const dateStr = row[0];
+      const name = (row[1] || "").trim();
+      const qtyStr = row[3];
+      const refStr = row[5];
+
+      if (!name) return;
+
+      const dateObj = new Date(dateStr.trim());
+      if (isNaN(dateObj.getTime())) return;
+
+      // Filter for items sold within the last 14 days
+      if (dateObj >= twoWeeksAgo && dateObj <= currentDate) {
+        const qty = parseFloat(qtyStr) || 0;
+        const ref = parseFloat(refStr) || 0;
+        const totalSold = qty * ref;
+
+        if (totalSold > 0) {
+          soldMap[name] = (soldMap[name] || 0) + totalSold;
+        }
+      }
+    });
+
+    soldDataCache = soldMap;
+    lastSoldFetchTime = now;
+    return soldMap;
+  } catch (error) {
+    console.error("fetchSoldDataFromSheet error:", error);
+    return soldDataCache || {};
+  }
+}
+
+app.get("/api/sold-data", async (req, res) => {
+  try {
+    const forceRefresh = req.query.refresh === "true";
+    if (forceRefresh) {
+      lastSoldFetchTime = 0;
+    }
+    const soldMap = await fetchSoldDataFromSheet();
+    res.json({ soldMap });
+  } catch (error: any) {
+    console.error("Sold data error:", error);
+    res.status(500).json({ error: error.message || "Failed to fetch sold data" });
+  }
+});
+
 app.get("/api/products", async (req, res) => {
   try {
     const forceRefresh = req.query.refresh === "true";

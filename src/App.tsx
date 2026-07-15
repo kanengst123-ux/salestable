@@ -403,6 +403,7 @@ export default function App() {
   const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState<boolean>(false);
   const [isStockDropdownOpen, setIsStockDropdownOpen] = useState<boolean>(false);
   const [stockFilter, setStockFilter] = useState<string>("all"); // 'all' | 'in-stock' | 'out-of-stock' | 'always-stock'
+  const [soldData, setSoldData] = useState<Record<string, number>>({});
   const [sortKey, setSortKey] = useState<string>("name-asc"); // 'name-asc' | 'price-asc' | 'price-desc' | 'id-asc'
   
   // Pagination States
@@ -454,6 +455,20 @@ export default function App() {
   const catalogProductsCount = useMemo(() => {
     return (Object.values(productsByCategory) as Product[][]).reduce((acc, curr) => acc + curr.length, 0);
   }, [productsByCategory]);
+
+  const deadStockCount = useMemo(() => {
+    const soldNamesNormalized = new Set(
+      Object.keys(soldData).map(name => name.replace(/\s+/g, "").trim().toLowerCase())
+    );
+    return products.filter(p => {
+      const norm = p.name.replace(/\s+/g, "").trim().toLowerCase();
+      const hasSold = soldNamesNormalized.has(norm);
+      if (hasSold) return false;
+      const price = parseFloat(getProductPrice(p)) || 0;
+      if (price === 999) return false;
+      return true;
+    }).length;
+  }, [products, soldData]);
 
   // One-click background cache downloader with progress tracking
   const handlePrecacheAllImages = async () => {
@@ -1520,11 +1535,33 @@ export default function App() {
       setSyncing(true);
       setError(null);
       const url = forceRefresh ? "/api/products?refresh=true" : "/api/products";
-      const res = await fetch(url);
+      const soldUrl = forceRefresh ? "/api/sold-data?refresh=true" : "/api/sold-data";
+      
+      const [res, soldRes] = await Promise.all([
+        fetch(url),
+        fetch(soldUrl).catch(e => {
+          console.warn("Failed to fetch sold data:", e);
+          return null;
+        })
+      ]);
+
       if (!res.ok) {
         throw new Error(`Failed to load product data (${res.statusText})`);
       }
       const data = await res.json();
+
+      if (soldRes && soldRes.ok) {
+        const soldResult = await soldRes.json();
+        if (soldResult.soldMap) {
+          setSoldData(soldResult.soldMap);
+          try {
+            localStorage.setItem("cached_sold_data", JSON.stringify(soldResult.soldMap));
+          } catch (e) {
+            console.warn("Storage write failed for sold data:", e);
+          }
+        }
+      }
+
       if (data.products) {
         // Safe client-side deduplication by ID, ensuring perfect uniquely-keyed rendering
         const uniqueProducts: any[] = [];
@@ -1564,6 +1601,15 @@ export default function App() {
         const cachedProductsStr = localStorage.getItem("cached_products");
         const cachedCostStr = localStorage.getItem("cached_cost_categories");
         const cachedSyncTimeStr = localStorage.getItem("cached_sync_time");
+        const cachedSoldStr = localStorage.getItem("cached_sold_data");
+
+        if (cachedSoldStr) {
+          try {
+            setSoldData(JSON.parse(cachedSoldStr));
+          } catch (e) {
+            console.warn("Parsing cached sold data failed:", e);
+          }
+        }
 
         if (cachedProductsStr) {
           const parsedProducts = JSON.parse(cachedProductsStr);
@@ -1791,6 +1837,18 @@ export default function App() {
         }
         return !p.alwaysStock && p.secondaryStockCount === "0";
       });
+    } else if (stockFilter === "dead-stock") {
+      const soldNamesNormalized = new Set(
+        Object.keys(soldData).map(name => name.replace(/\s+/g, "").trim().toLowerCase())
+      );
+      result = result.filter(p => {
+        const norm = p.name.replace(/\s+/g, "").trim().toLowerCase();
+        const hasSold = soldNamesNormalized.has(norm);
+        if (hasSold) return false;
+        const price = parseFloat(getProductPrice(p)) || 0;
+        if (price === 999) return false;
+        return true;
+      });
     }
 
     // 3.5 Cost Category Filter (from Col F of Cost tab)
@@ -1800,6 +1858,16 @@ export default function App() {
 
     // 4. Sorting
     result.sort((a, b) => {
+      if (stockFilter === "dead-stock") {
+        const qtyA = parseInt(a.secondaryStockCount, 10) || 0;
+        const qtyB = parseInt(b.secondaryStockCount, 10) || 0;
+        const priceA = parseFloat(getProductPrice(a)) || 0;
+        const priceB = parseFloat(getProductPrice(b)) || 0;
+        const valueA = qtyA * priceA;
+        const valueB = qtyB * priceB;
+        return valueB - valueA; // rank high dead stock value at top
+      }
+
       const priceA = parseFloat(getProductPrice(a)) || 0;
       const priceB = parseFloat(getProductPrice(b)) || 0;
 
@@ -1821,7 +1889,7 @@ export default function App() {
     });
 
     return result;
-  }, [products, searchQuery, selectedParentCategory, selectedSubCategory, stockFilter, sortKey, selectedCostCategoryName, selectedPriceTier, viewMode]);
+  }, [products, searchQuery, selectedParentCategory, selectedSubCategory, stockFilter, sortKey, selectedCostCategoryName, selectedPriceTier, viewMode, soldData]);
 
   // Page Calculations
   const totalPages = 1;
@@ -1969,7 +2037,7 @@ export default function App() {
 
           <main className="max-w-7xl mx-auto px-4 md:px-6 py-6 lg:py-8 space-y-6">
             {/* Quick Stats Summary row */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-fadeIn">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 animate-fadeIn">
               {/* Card 1: 目錄商品總數 */}
               <button
                 onClick={() => {
@@ -2055,7 +2123,28 @@ export default function App() {
                   }).length}
                 </span>
                 <span className={`text-[10px] block mt-1.5 font-medium ${stockFilter === "zero-stock" ? "text-rose-600" : "text-slate-500"}`}>
-                  {stockFilter === "zero-stock" ? "✓ 正在篩選缺貨產品" : "點擊篩選缺貨 (Col AB & AC = 0)"}
+                  {stockFilter === "zero-stock" ? "✓ 正在篩選缺貨產品" : "點擊篩選缺貨"}
+                </span>
+              </button>
+
+              {/* Card 5: 死貨 */}
+              <button
+                onClick={() => {
+                  setStockFilter("dead-stock");
+                  setCurrentPage(1);
+                }}
+                className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+                  stockFilter === "dead-stock"
+                    ? "bg-amber-50 border-amber-500 text-amber-900 shadow-sm scale-[1.02]"
+                    : "bg-white text-slate-900 border-slate-100 hover:border-slate-300 hover:shadow-xs"
+                }`}
+              >
+                <span className={`text-[10px] uppercase tracking-wider font-bold block ${stockFilter === "dead-stock" ? "text-amber-600" : "text-slate-400"}`}>死貨</span>
+                <span className={`text-2xl font-black mt-1 block ${stockFilter === "dead-stock" ? "text-amber-700" : "text-amber-600"}`}>
+                  {deadStockCount}
+                </span>
+                <span className={`text-[10px] block mt-1.5 font-medium ${stockFilter === "dead-stock" ? "text-amber-600" : "text-slate-500"}`}>
+                  {stockFilter === "dead-stock" ? "✓ 正在篩選死貨" : "2週未售出，庫存x售價排行"}
                 </span>
               </button>
             </div>
@@ -2216,6 +2305,9 @@ export default function App() {
                         <th className="px-4 py-3">圖片</th>
                         <th className="px-4 py-3">商品名稱</th>
                         <th className="px-4 py-3 text-right">單價</th>
+                        {stockFilter === "dead-stock" && (
+                          <th className="px-4 py-3 text-right text-amber-700 bg-amber-50/30 font-bold">死貨估值</th>
+                        )}
                         <th className="px-4 py-3 text-center">庫存狀態</th>
                         <th className="px-4 py-3 text-center">操作</th>
                       </tr>
@@ -2223,7 +2315,7 @@ export default function App() {
                     <tbody className="divide-y divide-slate-100">
                       {processedProducts.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="px-4 py-10 text-center text-slate-400 italic">
+                          <td colSpan={stockFilter === "dead-stock" ? 6 : 5} className="px-4 py-10 text-center text-slate-400 italic">
                             沒有與您的搜尋條件匹配的商品記錄。
                           </td>
                         </tr>
@@ -2248,8 +2340,13 @@ export default function App() {
                               </div>
                             </td>
                             <td className="px-4 py-2 text-right font-black text-slate-900 font-mono">
-                              {parseFloat(prod.price) > 0 ? `HK$${parseFloat(prod.price).toFixed(2)}` : "HK$0.00"}
+                              {parseFloat(getProductPrice(prod)) > 0 ? `HK$${parseFloat(getProductPrice(prod)).toFixed(2)}` : "HK$0.00"}
                             </td>
+                            {stockFilter === "dead-stock" && (
+                              <td className="px-4 py-2 text-right font-bold text-amber-700 bg-amber-50/20 font-mono">
+                                HK${((parseInt(prod.secondaryStockCount, 10) || 0) * (parseFloat(getProductPrice(prod)) || 0)).toFixed(2)}
+                              </td>
+                            )}
                             <td className="px-4 py-2 text-center">
                               {prod.alwaysStock ? (
                                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-100">
@@ -2606,6 +2703,7 @@ export default function App() {
                     {stockFilter === "out-of-stock" && "無現貨 (不顯示/圖片置灰)"}
                     {stockFilter === "always-stock" && "長期充足 (無限量供應)"}
                     {stockFilter === "zero-stock" && "缺貨產品 (Col AB & AC = 0)"}
+                    {stockFilter === "dead-stock" && "死貨產品 (2週未售出)"}
                   </span>
                   <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isStockDropdownOpen ? "rotate-180" : ""}`} />
                 </button>
@@ -2617,7 +2715,8 @@ export default function App() {
                       { value: "in-stock", label: "僅顯示有現貨" },
                       { value: "out-of-stock", label: "無現貨 (不顯示/圖片置灰)" },
                       { value: "always-stock", label: "長期充足 (無限量供應)" },
-                      { value: "zero-stock", label: "缺貨產品 (Col AB & AC = 0)" }
+                      { value: "zero-stock", label: "缺貨產品 (Col AB & AC = 0)" },
+                      { value: "dead-stock", label: "死貨產品 (2週未售出)" }
                     ].map(opt => (
                       <button
                         key={opt.value}
@@ -2855,6 +2954,14 @@ export default function App() {
                             <span className="inline-block text-[11px] font-medium text-indigo-600 bg-indigo-50/50 border border-indigo-100/50 rounded-md px-1.5 py-0.5">
                               {product.extraAttributes["Categories"].trim()}
                             </span>
+                          )}
+                          {stockFilter === "dead-stock" && (
+                            <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] font-bold text-amber-700 bg-amber-50/70 border border-amber-100 rounded-lg px-2 py-1">
+                              <span>死貨估值 (庫存 × 售價):</span>
+                              <span className="text-xs font-black text-amber-800">
+                                HK${((parseInt(product.secondaryStockCount, 10) || 0) * (parseFloat(getProductPrice(product)) || 0)).toFixed(2)}
+                              </span>
+                            </div>
                           )}
                         </div>
 
