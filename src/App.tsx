@@ -885,11 +885,13 @@ export default function App() {
 
       // Create outline bookmarks root
       const outline = doc.outline;
-      let categoriesParent = null;
       if (outline) {
-        categoriesParent = outline.add(null, fontAdded ? "商品分類" : "Categories", { pageNumber: 1 });
+        // Add Cover Page bookmark
+        outline.add(null, fontAdded ? "封面 / Cover Page" : "Cover Page", { pageNumber: 1 });
+        
+        // Add a bookmark for each category directly at the top level for ultra-fast navigation
         Object.entries(categoryPageMap).forEach(([catName, pageNumVal]) => {
-          outline.add(categoriesParent, catName, { pageNumber: pageNumVal });
+          outline.add(null, catName, { pageNumber: pageNumVal });
         });
       }
 
