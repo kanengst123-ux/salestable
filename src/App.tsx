@@ -951,10 +951,15 @@ export default function App() {
           const isOutOfStock = !p.hasStock;
 
           // 1. Card Frame
+          const hasCategoryLabel = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].trim() !== "";
           if (isOutOfStock) {
             doc.setDrawColor(203, 213, 225); // muted slate-300 border
             doc.setLineWidth(0.35);
             doc.setFillColor(248, 250, 252); // light slate-50 card body
+          } else if (hasCategoryLabel) {
+            doc.setDrawColor(212, 175, 55); // Gold border color (212, 175, 55)
+            doc.setLineWidth(0.75); // thicker gold border
+            doc.setFillColor(255, 255, 255); // white card body
           } else {
             doc.setDrawColor(28, 49, 115); // brand navy border
             doc.setLineWidth(0.35);
@@ -1006,25 +1011,7 @@ export default function App() {
             doc.text("[ 暫無圖片 ]", cx + 22.5, cy + 14.5, { align: "center" });
           }
 
-          // 3. Stock Status Badge (top-left over image)
-          let badgeText = "有現貨";
-          let badgeBg = [245, 158, 11]; // orange
-          if (p.alwaysStock) {
-            badgeText = "長期充足";
-            badgeBg = [16, 185, 129]; // green
-          } else if (!p.hasStock) {
-            badgeText = "暫無現貨";
-            badgeBg = [148, 163, 184]; // grey
-          } else if (p.secondaryStockCount) {
-            badgeText = `有現貨 (${p.secondaryStockCount})`;
-          }
-
-          // Draw Stock Pill
-          doc.setFillColor(badgeBg[0], badgeBg[1], badgeBg[2]);
-          doc.roundedRect(cx + 2.5, cy + 2.5, 16, 4, 1, 1, "F");
-          doc.setTextColor(255, 255, 255);
-          doc.setFontSize(5.5);
-          doc.text(badgeText, cx + 10.5, cy + 5.2, { align: "center" });
+          // 3. Stock Status Badge (Hidden per user requirement)
 
           // 4. Product ID
           doc.setFontSize(6);
@@ -5159,8 +5146,20 @@ function revertStockForOrders(orderIdsMap) {
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
-                      {productsByCategory[catName].map(p => (
-                        <div key={p.id} className="border border-slate-150 rounded-xl p-3 flex gap-3 bg-slate-50/50 items-start">
+                      {productsByCategory[catName].map(p => {
+                        const hasCategoryLabel = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].trim() !== "";
+                        return (
+                          <div
+                            key={p.id}
+                            className={`border rounded-xl p-3 flex gap-3 items-start transition-all ${
+                              !p.hasStock
+                                ? "border-slate-200 bg-slate-50 opacity-50 grayscale"
+                                : hasCategoryLabel
+                                ? "border-amber-400 bg-amber-50/30 shadow-xs"
+                                : "border-slate-150 bg-slate-50/50"
+                            }`}
+                            style={!p.hasStock ? undefined : hasCategoryLabel ? { borderColor: "#d4af37", borderWidth: "1.5px" } : undefined}
+                          >
                           {/* Photo */}
                           <div className="w-16 h-16 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 relative">
                             <ProductImage
@@ -5191,7 +5190,8 @@ function revertStockForOrders(orderIdsMap) {
                             )}
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -5249,39 +5249,52 @@ function revertStockForOrders(orderIdsMap) {
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              {productsByCategory[catName].map(p => (
-                <div key={p.id} className="border border-slate-200 rounded-xl p-4 flex gap-4 bg-slate-50/50 items-start">
-                  {/* Photo */}
-                  <div className="w-20 h-20 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 relative">
-                    <ProductImage
-                      id={p.id}
-                      name={p.name}
-                      fallbackUrl={p.extraAttributes?.["Image URLs"]}
-                      isOutOfStock={!p.hasStock}
-                      version={imageVersion}
-                    />
-                  </div>
-                  {/* Info */}
-                  <div className="space-y-1.5 min-w-0 flex-grow">
-                    <span className="text-[10px] font-mono font-bold text-slate-400 block uppercase tracking-wide">
-                      SKU ID: {p.id}
-                    </span>
-                    <h4 className="font-bold text-sm text-slate-800 leading-snug">{p.name}</h4>
-                    <div className="text-sm font-black text-slate-900">
-                      {parseFloat(getProductPrice(p)) > 0 ? (
-                        `HK$${parseFloat(getProductPrice(p)).toFixed(2)}`
-                      ) : (
-                        <span className="text-[10px] text-rose-500 font-extrabold bg-rose-50 px-2 py-0.5 rounded">價格由詢價決定</span>
+              {productsByCategory[catName].map(p => {
+                const hasCategoryLabel = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].trim() !== "";
+                return (
+                  <div
+                    key={p.id}
+                    className={`border rounded-xl p-4 flex gap-4 items-start transition-all ${
+                      !p.hasStock
+                        ? "border-slate-200 bg-slate-50 opacity-50 grayscale"
+                        : hasCategoryLabel
+                        ? "border-amber-400 bg-amber-50/30 shadow-xs"
+                        : "border-slate-200 bg-slate-50/50"
+                    }`}
+                    style={!p.hasStock ? undefined : hasCategoryLabel ? { borderColor: "#d4af37", borderWidth: "1.5px" } : undefined}
+                  >
+                    {/* Photo */}
+                    <div className="w-20 h-20 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 relative">
+                      <ProductImage
+                        id={p.id}
+                        name={p.name}
+                        fallbackUrl={p.extraAttributes?.["Image URLs"]}
+                        isOutOfStock={!p.hasStock}
+                        version={imageVersion}
+                      />
+                    </div>
+                    {/* Info */}
+                    <div className="space-y-1.5 min-w-0 flex-grow">
+                      <span className="text-[10px] font-mono font-bold text-slate-400 block uppercase tracking-wide">
+                        SKU ID: {p.id}
+                      </span>
+                      <h4 className="font-bold text-sm text-slate-800 leading-snug">{p.name}</h4>
+                      <div className="text-sm font-black text-slate-900">
+                        {parseFloat(getProductPrice(p)) > 0 ? (
+                          `HK$${parseFloat(getProductPrice(p)).toFixed(2)}`
+                        ) : (
+                          <span className="text-[10px] text-rose-500 font-extrabold bg-rose-50 px-2 py-0.5 rounded">價格由詢價決定</span>
+                        )}
+                      </div>
+                      {p.extraAttributes?.["Merchant Remark"] && (
+                        <p className="text-[10px] text-slate-500 italic pt-1 border-t border-slate-100">
+                          備註: {p.extraAttributes?.["Merchant Remark"]}
+                        </p>
                       )}
                     </div>
-                    {p.extraAttributes?.["Merchant Remark"] && (
-                      <p className="text-[10px] text-slate-500 italic pt-1 border-t border-slate-100">
-                        備註: {p.extraAttributes?.["Merchant Remark"]}
-                      </p>
-                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         ))}
