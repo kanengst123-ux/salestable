@@ -1040,26 +1040,29 @@ export default function App() {
             doc.text(line2, cx + 2.5, cy + 36.7);
           }
 
-          // 6. Category Pill Badge
-          let catText = p.costCategoryName || "其他分類";
-          if (catText.length > 12) {
-            catText = catText.substring(0, 11) + "...";
+          // 6. Category Pill Badge (Col M Categories from sheet only if exists, otherwise none, and completely ignoring standard costCategoryName)
+          const mLabel = p.extraAttributes?.["Categories"]?.trim();
+          if (mLabel) {
+            let catText = mLabel;
+            if (catText.length > 15) {
+              catText = catText.substring(0, 14) + "...";
+            }
+            if (isOutOfStock) {
+              doc.setFillColor(243, 244, 246); // grey-100
+              doc.setDrawColor(229, 231, 235); // grey-200 border
+              doc.setLineWidth(0.15);
+              doc.roundedRect(cx + 2.5, cy + 40, 20, 3.2, 0.5, 0.5, "FD");
+              doc.setTextColor(156, 163, 175); // grey-400
+            } else {
+              doc.setFillColor(254, 243, 199); // amber-100 (gold/yellow tint)
+              doc.setDrawColor(251, 191, 36); // amber-400 border
+              doc.setLineWidth(0.15);
+              doc.roundedRect(cx + 2.5, cy + 40, 20, 3.2, 0.5, 0.5, "FD");
+              doc.setTextColor(180, 83, 9); // amber-800 font
+            }
+            doc.setFontSize(5);
+            doc.text(catText, cx + 12.5, cy + 42.3, { align: "center" });
           }
-          if (isOutOfStock) {
-            doc.setFillColor(243, 244, 246); // grey-100
-            doc.setDrawColor(229, 231, 235); // grey-200 border
-            doc.setLineWidth(0.15);
-            doc.roundedRect(cx + 2.5, cy + 40, 16, 3.2, 0.5, 0.5, "FD");
-            doc.setTextColor(156, 163, 175); // grey-400
-          } else {
-            doc.setFillColor(239, 246, 255); // soft blue-50
-            doc.setDrawColor(219, 234, 254); // blue-100 border
-            doc.setLineWidth(0.15);
-            doc.roundedRect(cx + 2.5, cy + 40, 16, 3.2, 0.5, 0.5, "FD");
-            doc.setTextColor(79, 70, 229); // indigo-600
-          }
-          doc.setFontSize(5.5);
-          doc.text(catText, cx + 10.5, cy + 42.3, { align: "center" });
 
           // 7. Price Label and Price
           if (isOutOfStock) {
@@ -5084,7 +5087,7 @@ function revertStockForOrders(orderIdsMap) {
                   <li>點擊右上角的「<strong>列印 / 另存為 PDF</strong>」，將目的地設為「<strong>另存為 PDF (Save as PDF)</strong>」。</li>
                   <li>在列印設定的<strong>「更多設定」</strong>(More settings) 中：
                     <ul className="list-disc pl-4 mt-0.5 space-y-0.5 font-bold text-amber-950">
-                      <li>將「邊界」(Margins) 設為「<strong>無</strong>」(None) 或「預設」，以獲得最大顯示區域。</li>
+                      <li>將「邊界」(Margins) 設为「<strong>無</strong>」(None) 或「預設」，以獲得最大顯示區域。</li>
                       <li>必須勾選「<strong>背景圖形</strong>」(Background graphics) 以顯示顏色背景與卡片樣式！</li>
                     </ul>
                   </li>
@@ -5183,6 +5186,11 @@ function revertStockForOrders(orderIdsMap) {
                                 <span className="text-[10px] text-rose-500 font-extrabold bg-rose-50 px-1 py-0.2 rounded">價格由詢價決定</span>
                               )}
                             </div>
+                            {hasCategoryLabel && (
+                              <span className="inline-block text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 mt-0.5">
+                                {p.extraAttributes["Categories"].trim()}
+                              </span>
+                            )}
                             {p.extraAttributes?.["Merchant Remark"] && (
                               <p className="text-[9px] text-slate-400 line-clamp-1 italic">
                                 備註: {p.extraAttributes?.["Merchant Remark"]}
@@ -5286,6 +5294,11 @@ function revertStockForOrders(orderIdsMap) {
                           <span className="text-[10px] text-rose-500 font-extrabold bg-rose-50 px-2 py-0.5 rounded">價格由詢價決定</span>
                         )}
                       </div>
+                      {hasCategoryLabel && (
+                        <span className="inline-block text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 mt-1">
+                          {p.extraAttributes["Categories"].trim()}
+                        </span>
+                      )}
                       {p.extraAttributes?.["Merchant Remark"] && (
                         <p className="text-[10px] text-slate-500 italic pt-1 border-t border-slate-100">
                           備註: {p.extraAttributes?.["Merchant Remark"]}
