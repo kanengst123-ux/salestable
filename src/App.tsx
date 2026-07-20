@@ -650,12 +650,14 @@ export default function App() {
       }
 
       // Helper to convert blob to base64 with canvas-based downscaling (reduces PDF size from 1GB to 25MB for 1800+ items!)
-      const blobToBase64 = (blob: Blob): Promise<string> => {
+      const blobToBase64 = (blob: Blob): Promise<{ base64: string, width: number, height: number }> => {
         return new Promise((resolve) => {
           const img = new Image();
           const url = URL.createObjectURL(blob);
           img.onload = () => {
             URL.revokeObjectURL(url);
+            const originalWidth = img.width || 300;
+            const originalHeight = img.height || 180;
             let width = img.width;
             let height = img.height;
 
@@ -680,16 +682,20 @@ export default function App() {
               ctx.drawImage(img, 0, 0, width, height);
               const dataUrl = canvas.toDataURL("image/jpeg", 0.75); // 0.75 quality is perfectly clear for 42x25mm
               if (dataUrl && dataUrl.includes(",")) {
-                resolve(dataUrl.split(",")[1]);
+                resolve({ base64: dataUrl.split(",")[1], width: originalWidth, height: originalHeight });
               } else {
-                resolve("");
+                resolve({ base64: "", width: originalWidth, height: originalHeight });
               }
             } else {
               // fallback if canvas context fails
               const reader = new FileReader();
               reader.onloadend = () => {
                 const result = reader.result as string;
-                resolve(result && result.includes(",") ? result.split(",")[1] : "");
+                resolve({
+                  base64: result && result.includes(",") ? result.split(",")[1] : "",
+                  width: originalWidth,
+                  height: originalHeight
+                });
               };
               reader.readAsDataURL(blob);
             }
@@ -700,7 +706,11 @@ export default function App() {
             const reader = new FileReader();
             reader.onloadend = () => {
               const result = reader.result as string;
-              resolve(result && result.includes(",") ? result.split(",")[1] : "");
+              resolve({
+                base64: result && result.includes(",") ? result.split(",")[1] : "",
+                width: 42,
+                height: 25
+              });
             };
             reader.readAsDataURL(blob);
           };
@@ -709,7 +719,7 @@ export default function App() {
       };
 
       // Helper to resolve product image from browser cache or fallback URL
-      const getProductImageBase64 = async (product: Product): Promise<{ base64: string, format: string } | null> => {
+      const getProductImageBase64 = async (product: Product): Promise<{ base64: string, format: string, width: number, height: number } | null> => {
         // Check memory cache first to instantly bypass network/cache hits if resolved before
         if (typeof window !== "undefined") {
           (window as any).__RESOLVED_BASE64_CACHE__ = (window as any).__RESOLVED_BASE64_CACHE__ || {};
@@ -780,10 +790,10 @@ export default function App() {
                 const contentType = matched.headers.get("content-type");
                 if (!contentType || !contentType.includes("text/html")) {
                   const blob = await matched.blob();
-                  const b64 = await blobToBase64(blob);
-                  if (b64) {
+                  const imgResult = await blobToBase64(blob);
+                  if (imgResult.base64) {
                     const format = url.toLowerCase().endsWith(".png") ? "PNG" : "JPEG";
-                    const resObj = { base64: b64, format };
+                    const resObj = { base64: imgResult.base64, format, width: imgResult.width, height: imgResult.height };
                     // Remember this URL as working!
                     if (typeof window !== "undefined") {
                       (window as any).__RESOLVED_IMAGES__ = (window as any).__RESOLVED_IMAGES__ || {};
@@ -803,10 +813,10 @@ export default function App() {
               const contentType = response.headers.get("content-type");
               if (!contentType || !contentType.includes("text/html")) {
                 const blob = await response.blob();
-                const b64 = await blobToBase64(blob);
-                if (b64) {
+                const imgResult = await blobToBase64(blob);
+                if (imgResult.base64) {
                   const format = url.toLowerCase().endsWith(".png") ? "PNG" : "JPEG";
-                  const resObj = { base64: b64, format };
+                  const resObj = { base64: imgResult.base64, format, width: imgResult.width, height: imgResult.height };
                   // Remember this URL as working!
                   if (typeof window !== "undefined") {
                     (window as any).__RESOLVED_IMAGES__ = (window as any).__RESOLVED_IMAGES__ || {};
@@ -858,7 +868,7 @@ export default function App() {
       });
 
       // Parallel batch image resolver loop with real-time UI updates
-      const processedProducts: { product: Product, imgData: string | null, format: string | null }[] = [];
+      const processedProducts: { product: Product, imgData: string | null, format: string | null, width?: number, height?: number }[] = [];
       const batchSize = 15;
       
       showToast(`正在產生商品目錄 PDF... (共 ${sortedProducts.length} 款商品)`);
@@ -874,7 +884,9 @@ export default function App() {
               return {
                 product: p,
                 imgData: imgResult ? imgResult.base64 : null,
-                format: imgResult ? imgResult.format : null
+                format: imgResult ? imgResult.format : null,
+                width: imgResult ? imgResult.width : undefined,
+                height: imgResult ? imgResult.height : undefined
               };
             } catch (err) {
               return { product: p, imgData: null, format: null };
@@ -970,7 +982,35 @@ export default function App() {
           // 2. Image inside Card
           if (item.imgData) {
             try {
-              doc.addImage(item.imgData, item.format || "JPEG", cx + 1.5, cy + 1.5, 42, 25);
+              let imgW = 42;
+              let imgH = 25;
+              let imgX = cx + 1.5;
+              let imgY = cy + 1.5;
+
+              const originalW = item.width;
+              const originalH = item.height;
+
+              if (originalW && originalH) {
+                const targetRatio = 42 / 25;
+                const imageRatio = originalW / originalH;
+
+                if (imageRatio > targetRatio) {
+                  // Image is wider than the target aspect ratio
+                  // It will be limited by the width (42)
+                  imgW = 42;
+                  imgH = 42 / imageRatio;
+                } else {
+                  // Image is taller than the target aspect ratio
+                  // It will be limited by the height (25)
+                  imgH = 25;
+                  imgW = 25 * imageRatio;
+                }
+                // Center the image inside the 42 x 25 bounding box
+                imgX = cx + 1.5 + (42 - imgW) / 2;
+                imgY = cy + 1.5 + (25 - imgH) / 2;
+              }
+
+              doc.addImage(item.imgData, item.format || "JPEG", imgX, imgY, imgW, imgH);
               
               // Draw semi-transparent grey overlay for out-of-stock items
               if (isOutOfStock) {
