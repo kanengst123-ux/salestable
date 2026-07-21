@@ -4445,33 +4445,38 @@ function doPost(e) {
         sheet.getRange(rowToUpdate, 3).setValue(name || "");
       }
       
-      // Update Price in Col O (Col 15) and set client tier prices (Col R/S/T) if present
-      if (price !== undefined) {
-        var pNum = parseFloat(price.toString().replace(/[$,\s]/g, '')) || 0;
+      // Safe function to parse numeric price values and prevent crashes on empty/null inputs
+      function safeParsePrice(val) {
+        if (val === undefined || val === null || val.toString().trim() === "") {
+          return NaN;
+        }
+        var parsed = parseFloat(val.toString().replace(/[$,\s]/g, ''));
+        return isNaN(parsed) ? NaN : parsed;
+      }
+
+      var pNum = safeParsePrice(price);
+      if (!isNaN(pNum)) {
         sheet.getRange(rowToUpdate, 15).setValue(pNum); // Col O: Price
       }
       
-      if (priceA !== undefined) {
-        var pA = parseFloat(priceA.toString().replace(/[$,\s]/g, ''));
-        if (!isNaN(pA)) sheet.getRange(rowToUpdate, 18).setValue(pA); // Col R: A 價 (Gold Price)
-      } else if (price !== undefined) {
-        var pNum = parseFloat(price.toString().replace(/[$,\s]/g, '')) || 0;
+      var pA = safeParsePrice(priceA);
+      if (!isNaN(pA)) {
+        sheet.getRange(rowToUpdate, 18).setValue(pA); // Col R: A 價 (Gold Price)
+      } else if (!isNaN(pNum)) {
         sheet.getRange(rowToUpdate, 18).setValue(pNum);
       }
 
-      if (priceB !== undefined) {
-        var pB = parseFloat(priceB.toString().replace(/[$,\s]/g, ''));
-        if (!isNaN(pB)) sheet.getRange(rowToUpdate, 19).setValue(pB); // Col S: B 價 (Silver Price)
-      } else if (price !== undefined) {
-        var pNum = parseFloat(price.toString().replace(/[$,\s]/g, '')) || 0;
+      var pB = safeParsePrice(priceB);
+      if (!isNaN(pB)) {
+        sheet.getRange(rowToUpdate, 19).setValue(pB); // Col S: B 價 (Silver Price)
+      } else if (!isNaN(pNum)) {
         sheet.getRange(rowToUpdate, 19).setValue(pNum);
       }
 
-      if (priceC !== undefined) {
-        var pC = parseFloat(priceC.toString().replace(/[$,\s]/g, ''));
-        if (!isNaN(pC)) sheet.getRange(rowToUpdate, 20).setValue(pC); // Col T: C 價 (Basic Price)
-      } else if (price !== undefined) {
-        var pNum = parseFloat(price.toString().replace(/[$,\s]/g, '')) || 0;
+      var pC = safeParsePrice(priceC);
+      if (!isNaN(pC)) {
+        sheet.getRange(rowToUpdate, 20).setValue(pC); // Col T: C 價 (Basic Price)
+      } else if (!isNaN(pNum)) {
         sheet.getRange(rowToUpdate, 20).setValue(pNum);
       }
       
