@@ -897,7 +897,7 @@ export default function App() {
       }
 
       // Group bookmarks by category and their page numbers
-      const productsPerPage = 20;
+      const productsPerPage = 16;
       const totalPages = Math.ceil(processedProducts.length / productsPerPage);
       const categoryPageMap: Record<string, number> = {};
       
@@ -922,7 +922,7 @@ export default function App() {
         });
       }
 
-      // 2. Render Product Catalog Grid (4 x 5 per page)
+      // 2. Render Product Catalog Grid (4 x 4 per page)
       let pageNum = 1;
 
       for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
@@ -948,7 +948,7 @@ export default function App() {
         // Divider line
         doc.setDrawColor(226, 232, 240);
         doc.setLineWidth(0.3);
-        doc.line(10.5, 15, 199.5, 15);
+        doc.line(12, 15, 198, 15);
 
         const startIndex = pageIdx * productsPerPage;
         const pageProducts = processedProducts.slice(startIndex, startIndex + productsPerPage);
@@ -956,8 +956,8 @@ export default function App() {
         pageProducts.forEach((item, index) => {
           const row = Math.floor(index / 4);
           const col = index % 4;
-          const cx = 10.5 + col * (45 + 3);
-          const cy = 20 + row * (50 + 3);
+          const cx = 10 + col * (43 + 6);
+          const cy = 20 + row * (58 + 10);
 
           const p = item.product;
           const isOutOfStock = !p.hasStock;
@@ -969,7 +969,7 @@ export default function App() {
             doc.setLineWidth(0.35);
             doc.setFillColor(248, 250, 252); // light slate-50 card body
           } else if (hasCategoryLabel) {
-            doc.setDrawColor(212, 175, 55); // Gold border color (212, 175, 55)
+            doc.setDrawColor(212, 175, 55); // Gold border color
             doc.setLineWidth(0.75); // thicker gold border
             doc.setFillColor(255, 255, 255); // white card body
           } else {
@@ -977,51 +977,45 @@ export default function App() {
             doc.setLineWidth(0.35);
             doc.setFillColor(255, 255, 255); // white card body
           }
-          doc.roundedRect(cx, cy, 45, 50, 2.5, 2.5, "FD");
+          doc.roundedRect(cx, cy, 43, 58, 2.5, 2.5, "FD");
 
           // 2. Image inside Card
           if (item.imgData) {
             try {
-              let imgW = 42;
+              let imgW = 39;
               let imgH = 25;
-              let imgX = cx + 1.5;
-              let imgY = cy + 1.5;
+              let imgX = cx + 2;
+              let imgY = cy + 2;
 
               const originalW = item.width;
               const originalH = item.height;
 
               if (originalW && originalH) {
-                const targetRatio = 42 / 25;
+                const targetRatio = 39 / 25;
                 const imageRatio = originalW / originalH;
 
                 if (imageRatio > targetRatio) {
-                  // Image is wider than the target aspect ratio
-                  // It will be limited by the width (42)
-                  imgW = 42;
-                  imgH = 42 / imageRatio;
+                  imgW = 39;
+                  imgH = 39 / imageRatio;
                 } else {
-                  // Image is taller than the target aspect ratio
-                  // It will be limited by the height (25)
                   imgH = 25;
                   imgW = 25 * imageRatio;
                 }
-                // Center the image inside the 42 x 25 bounding box
-                imgX = cx + 1.5 + (42 - imgW) / 2;
-                imgY = cy + 1.5 + (25 - imgH) / 2;
+                imgX = cx + 2 + (39 - imgW) / 2;
+                imgY = cy + 2 + (25 - imgH) / 2;
               }
 
               doc.addImage(item.imgData, item.format || "JPEG", imgX, imgY, imgW, imgH);
               
-              // Draw semi-transparent grey overlay for out-of-stock items
+              // Draw semi-transparent overlay for out-of-stock items
               if (isOutOfStock) {
                 try {
                   const gState = new (doc as any).GState({ opacity: 0.55 });
                   doc.setGState(gState);
                   doc.setFillColor(220, 225, 230); // light slate overlay
-                  doc.rect(cx + 1.5, cy + 1.5, 42, 25, "F");
+                  doc.rect(cx + 2, cy + 2, 39, 25, "F");
                   doc.setGState(new (doc as any).GState({ opacity: 1.0 })); // reset
                 } catch (gStateErr) {
-                  // Fallback: draw light solid rectangle if GState is not available
                   doc.setFillColor(241, 245, 249);
                 }
               }
@@ -1029,58 +1023,56 @@ export default function App() {
               // Draw thin border over the image
               doc.setDrawColor(226, 232, 240);
               doc.setLineWidth(0.15);
-              doc.roundedRect(cx + 1.5, cy + 1.5, 42, 25, 1.5, 1.5, "S");
+              doc.roundedRect(cx + 2, cy + 2, 39, 25, 2, 2, "S");
             } catch (imgErr) {
               // Draw placeholder on failure
               doc.setFillColor(248, 250, 252);
               doc.setDrawColor(226, 232, 240);
               doc.setLineWidth(0.2);
-              doc.roundedRect(cx + 1.5, cy + 1.5, 42, 25, 1.5, 1.5, "FD");
+              doc.roundedRect(cx + 2, cy + 2, 39, 25, 2, 2, "FD");
               doc.setTextColor(148, 163, 184);
-              doc.setFontSize(7);
-              doc.text("[ 圖片載入失敗 ]", cx + 22.5, cy + 14.5, { align: "center" });
+              doc.setFontSize(8);
+              doc.text("[ 圖片載入失敗 ]", cx + 21.5, cy + 14.5, { align: "center" });
             }
           } else {
             // Draw default placeholder
             doc.setFillColor(248, 250, 252);
             doc.setDrawColor(226, 232, 240);
             doc.setLineWidth(0.2);
-            doc.roundedRect(cx + 1.5, cy + 1.5, 42, 25, 1.5, 1.5, "FD");
+            doc.roundedRect(cx + 2, cy + 2, 39, 25, 2, 2, "FD");
             doc.setTextColor(148, 163, 184);
-            doc.setFontSize(7);
-            doc.text("[ 暫無圖片 ]", cx + 22.5, cy + 14.5, { align: "center" });
+            doc.setFontSize(8);
+            doc.text("[ 暫無圖片 ]", cx + 21.5, cy + 14.5, { align: "center" });
           }
 
-          // 3. Stock Status Badge (Hidden per user requirement)
-
           // 4. Product ID
-          doc.setFontSize(6);
+          doc.setFontSize(7.5);
           if (isOutOfStock) {
             doc.setTextColor(156, 163, 175); // grey-400
           } else {
             doc.setTextColor(100, 116, 139); // slate-500
           }
-          doc.text(`編號: ${p.id}`, cx + 2.5, cy + 29.5);
+          doc.text(`編號: ${p.id}`, cx + 2.5, cy + 31);
 
           // 5. Product Name (wrap across up to 2 lines)
-          doc.setFontSize(7.5);
+          doc.setFontSize(8.5);
           if (isOutOfStock) {
             doc.setTextColor(156, 163, 175); // grey-400
           } else {
             doc.setTextColor(15, 23, 42); // slate-900
           }
-          const wrappedName = doc.splitTextToSize(p.name, 40);
+          const wrappedName = doc.splitTextToSize(p.name, 38);
           const line1 = wrappedName[0] || "";
           let line2 = wrappedName[1] || "";
           if (wrappedName.length > 2) {
             line2 = line2.substring(0, Math.max(0, line2.length - 2)) + "...";
           }
-          doc.text(line1, cx + 2.5, cy + 33.5);
+          doc.text(line1, cx + 2.5, cy + 36);
           if (line2) {
-            doc.text(line2, cx + 2.5, cy + 36.7);
+            doc.text(line2, cx + 2.5, cy + 40);
           }
 
-          // 6. Category Pill Badge (Col M Categories from sheet only if exists, otherwise none, and completely ignoring standard costCategoryName)
+          // 6. Category Pill Badge (Col M Categories from sheet)
           const mLabel = p.extraAttributes?.["Categories"]?.trim();
           if (mLabel) {
             let catText = mLabel;
@@ -1091,17 +1083,17 @@ export default function App() {
               doc.setFillColor(243, 244, 246); // grey-100
               doc.setDrawColor(229, 231, 235); // grey-200 border
               doc.setLineWidth(0.15);
-              doc.roundedRect(cx + 2.5, cy + 40, 20, 3.2, 0.5, 0.5, "FD");
+              doc.roundedRect(cx + 2.5, cy + 43.5, 24, 4, 0.8, 0.8, "FD");
               doc.setTextColor(156, 163, 175); // grey-400
             } else {
-              doc.setFillColor(254, 243, 199); // amber-100 (gold/yellow tint)
+              doc.setFillColor(254, 243, 199); // amber-100
               doc.setDrawColor(251, 191, 36); // amber-400 border
               doc.setLineWidth(0.15);
-              doc.roundedRect(cx + 2.5, cy + 40, 20, 3.2, 0.5, 0.5, "FD");
+              doc.roundedRect(cx + 2.5, cy + 43.5, 24, 4, 0.8, 0.8, "FD");
               doc.setTextColor(180, 83, 9); // amber-800 font
             }
-            doc.setFontSize(5);
-            doc.text(catText, cx + 12.5, cy + 42.3, { align: "center" });
+            doc.setFontSize(6.5);
+            doc.text(catText, cx + 14.5, cy + 46.4, { align: "center" });
           }
 
           // 7. Price Label and Price
@@ -1110,90 +1102,90 @@ export default function App() {
           } else {
             doc.setTextColor(148, 163, 184); // slate-400
           }
-          doc.setFontSize(5.5);
-          doc.text("售價", cx + 2.5, cy + 46);
+          doc.setFontSize(7);
+          doc.text("售價", cx + 2.5, cy + 50.5);
 
           if (isOutOfStock) {
             doc.setTextColor(156, 163, 175); // grey-400
           } else {
             doc.setTextColor(15, 23, 42); // slate-900
           }
-          doc.setFontSize(8.5);
+          doc.setFontSize(10);
           const priceVal = parseFloat(getProductPrice(p));
           const priceStr = priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "價格由詢問決定";
-          doc.text(priceStr, cx + 2.5, cy + 49.2);
+          doc.text(priceStr, cx + 2.5, cy + 55);
 
           // Price Tier Label Square next to price
           if (priceVal > 0) {
             const priceWidth = doc.getTextWidth(priceStr);
-            const x_tier = cx + 2.5 + priceWidth + 1.2;
-            const y_tier = cy + 46.8;
+            const x_tier = cx + 2.5 + priceWidth + 1.5;
+            const y_tier = cy + 51.5;
             if (isOutOfStock) {
               doc.setFillColor(243, 244, 246); // grey-100
               doc.setDrawColor(229, 231, 235); // grey-200 border
               doc.setLineWidth(0.15);
-              doc.roundedRect(x_tier, y_tier, 3, 3, 0.3, 0.3, "FD");
+              doc.roundedRect(x_tier, y_tier, 4, 4, 0.5, 0.5, "FD");
               doc.setTextColor(156, 163, 175); // grey-400
             } else {
               doc.setFillColor(239, 246, 255); // slate-50/blue-50
               doc.setDrawColor(191, 219, 254); // blue-200 border
               doc.setLineWidth(0.15);
-              doc.roundedRect(x_tier, y_tier, 3, 3, 0.3, 0.3, "FD");
+              doc.roundedRect(x_tier, y_tier, 4, 4, 0.5, 0.5, "FD");
               doc.setTextColor(37, 99, 235); // blue-600
             }
-            doc.setFontSize(5.5);
-            doc.text(selectedPriceTier, x_tier + 1.5, y_tier + 2.2, { align: "center" });
+            doc.setFontSize(7);
+            doc.text(selectedPriceTier, x_tier + 2, y_tier + 2.9, { align: "center" });
           }
 
           // 8. Visual Vector Cart Button (bottom-right)
-          const cartCX = cx + 40.5;
-          const cartCY = cy + 45.5;
+          const cartCX = cx + 38;
+          const cartCY = cy + 52.5;
           if (isOutOfStock) {
             doc.setFillColor(249, 250, 251); // extremely light off-white
             doc.setDrawColor(243, 244, 246); // soft gray border
             doc.setLineWidth(0.2);
-            doc.circle(cartCX, cartCY, 2.5, "FD");
+            doc.circle(cartCX, cartCY, 3, "FD");
 
             // Vector Shopping Cart Outline (Muted Grey)
             doc.setDrawColor(209, 213, 219); // grey-300
             doc.setLineWidth(0.15);
             // Basket bottom
-            doc.line(cartCX - 1.0, cartCY + 0.6, cartCX + 0.5, cartCY + 0.6);
+            doc.line(cartCX - 1.2, cartCY + 0.7, cartCX + 0.6, cartCY + 0.7);
             // Basket back
-            doc.line(cartCX - 1.0, cartCY + 0.6, cartCX - 1.5, cartCY - 0.8);
+            doc.line(cartCX - 1.2, cartCY + 0.7, cartCX - 1.8, cartCY - 0.9);
             // Basket front
-            doc.line(cartCX + 0.5, cartCY + 0.6, cartCX + 1.0, cartCY - 0.8);
+            doc.line(cartCX + 0.6, cartCY + 0.7, cartCX + 1.2, cartCY - 0.9);
             // Basket top
-            doc.line(cartCX - 1.5, cartCY - 0.8, cartCX + 1.0, cartCY - 0.8);
+            doc.line(cartCX - 1.8, cartCY - 0.9, cartCX + 1.2, cartCY - 0.9);
             // Handle
-            doc.line(cartCX - 1.5, cartCY - 0.8, cartCX - 1.9, cartCY - 0.8);
+            doc.line(cartCX - 1.8, cartCY - 0.9, cartCX - 2.3, cartCY - 0.9);
             // Wheels
             doc.setFillColor(209, 213, 219);
-            doc.circle(cartCX - 0.8, cartCY + 1.1, 0.25, "F");
-            doc.circle(cartCX + 0.3, cartCY + 1.1, 0.25, "F");
+            doc.circle(cartCX - 0.9, cartCY + 1.3, 0.3, "F");
+            doc.circle(cartCX + 0.4, cartCY + 1.3, 0.3, "F");
           } else {
             doc.setFillColor(255, 255, 255);
             doc.setDrawColor(226, 232, 240); // slate-200 border
             doc.setLineWidth(0.2);
-            doc.circle(cartCX, cartCY, 2.5, "FD");
+            doc.circle(cartCX, cartCY, 3, "FD");
 
             // Vector Shopping Cart Outline
             doc.setDrawColor(100, 116, 139); // slate-500
             doc.setLineWidth(0.15);
             // Basket bottom
-            doc.line(cartCX - 1.0, cartCY + 0.6, cartCX + 0.5, cartCY + 0.6);
+            doc.line(cartCX - 1.2, cartCY + 0.7, cartCX + 0.6, cartCY + 0.7);
             // Basket back
-            doc.line(cartCX - 1.0, cartCY + 0.6, cartCX - 1.5, cartCY - 0.8);
+            doc.line(cartCX - 1.2, cartCY + 0.7, cartCX - 1.8, cartCY - 0.9);
             // Basket front
-            doc.line(cartCX + 0.5, cartCY + 0.6, cartCX + 1.0, cartCY - 0.8);
+            doc.line(cartCX + 0.6, cartCY + 0.7, cartCX + 1.2, cartCY - 0.9);
             // Basket top
-            doc.line(cartCX - 1.5, cartCY - 0.8, cartCX + 1.0, cartCY - 0.8);
+            doc.line(cartCX - 1.8, cartCY - 0.9, cartCX + 1.2, cartCY - 0.9);
             // Handle
-            doc.line(cartCX - 1.5, cartCY - 0.8, cartCX - 1.9, cartCY - 0.8);
+            doc.line(cartCX - 1.8, cartCY - 0.9, cartCX - 2.3, cartCY - 0.9);
             // Wheels
             doc.setFillColor(100, 116, 139);
-            doc.circle(cartCX - 0.8, cartCY + 1.1, 0.25, "F");
-            doc.circle(cartCX + 0.3, cartCY + 1.1, 0.25, "F");
+            doc.circle(cartCX - 0.9, cartCY + 1.3, 0.3, "F");
+            doc.circle(cartCX + 0.4, cartCY + 1.3, 0.3, "F");
           }
         });
       }
@@ -1239,6 +1231,9 @@ export default function App() {
   const [isEditingSelectedProduct, setIsEditingSelectedProduct] = useState<boolean>(false);
   const [editProductName, setEditProductName] = useState<string>("");
   const [editProductPrice, setEditProductPrice] = useState<string>("");
+  const [editProductPriceA, setEditProductPriceA] = useState<string>("");
+  const [editProductPriceB, setEditProductPriceB] = useState<string>("");
+  const [editProductPriceC, setEditProductPriceC] = useState<string>("");
   const [editProductQuantity, setEditProductQuantity] = useState<string>("");
   const [editProductRemarks, setEditProductRemarks] = useState<string>("");
   const [editProductImageFile, setEditProductImageFile] = useState<File | null>(null);
@@ -1499,7 +1494,10 @@ export default function App() {
       const payload = {
         id: selectedProduct.id,
         name: editProductName.trim(),
-        price: editProductPrice.trim() || "0",
+        price: editProductPriceA.trim() || "0",
+        priceA: editProductPriceA.trim(),
+        priceB: editProductPriceB.trim(),
+        priceC: editProductPriceC.trim(),
         quantity: editProductQuantity.trim(),
         remarks: editProductRemarks.trim(),
         base64Image: editProductImagePreview.startsWith("data:image") ? editProductImagePreview : undefined
@@ -1527,10 +1525,23 @@ export default function App() {
       // Update the selection as well
       const qtyNumber = parseInt(editProductQuantity.trim(), 10);
       const hasStock = isNaN(qtyNumber) ? true : qtyNumber > 0;
+      const updatedAllValues = [...(selectedProduct.allValues || [])];
+      if (updatedAllValues.length > 28) {
+        updatedAllValues[2] = editProductName.trim();
+        updatedAllValues[14] = editProductPriceA.trim() || "0";
+        updatedAllValues[17] = editProductPriceA.trim();
+        updatedAllValues[18] = editProductPriceB.trim();
+        updatedAllValues[19] = editProductPriceC.trim();
+        updatedAllValues[27] = (isNaN(qtyNumber) || editProductQuantity.trim() === "") ? "1" : "0";
+        updatedAllValues[28] = isNaN(qtyNumber) ? "" : qtyNumber.toString();
+      }
       setSelectedProduct({
         ...selectedProduct,
         name: editProductName.trim(),
-        price: editProductPrice.trim() || "0",
+        price: editProductPriceA.trim() || "0",
+        priceA: editProductPriceA.trim(),
+        priceB: editProductPriceB.trim(),
+        priceC: editProductPriceC.trim(),
         hasStock: hasStock,
         alwaysStock: isNaN(qtyNumber) || editProductQuantity.trim() === "",
         secondaryStockCount: isNaN(qtyNumber) ? "" : qtyNumber.toString(),
@@ -1538,7 +1549,8 @@ export default function App() {
           ...selectedProduct.extraAttributes,
           "Merchant Remark": editProductRemarks.trim(),
           "remarks": editProductRemarks.trim()
-        }
+        },
+        allValues: updatedAllValues
       });
     } catch (err: any) {
       console.error(err);
@@ -1552,6 +1564,9 @@ export default function App() {
     if (!selectedProduct) return;
     setEditProductName(selectedProduct.name);
     setEditProductPrice(selectedProduct.price);
+    setEditProductPriceA(selectedProduct.priceA || selectedProduct.price || "");
+    setEditProductPriceB(selectedProduct.priceB || selectedProduct.price || "");
+    setEditProductPriceC(selectedProduct.priceC || selectedProduct.price || "");
     setEditProductQuantity(selectedProduct.alwaysStock ? "" : (selectedProduct.secondaryStockCount || ""));
     setEditProductRemarks(selectedProduct.extraAttributes?.["Merchant Remark"] || selectedProduct.extraAttributes?.["remarks"] || "");
     setEditProductImageFile(null);
@@ -1859,14 +1874,7 @@ export default function App() {
     } else if (stockFilter === "always-stock") {
       result = result.filter(p => p.alwaysStock);
     } else if (stockFilter === "zero-stock") {
-      result = result.filter(p => {
-        if (p.allValues && p.allValues.length > 28) {
-          const ab = (p.allValues[27] || "").trim();
-          const ac = (p.allValues[28] || "").trim();
-          return ab === "0" && ac === "0";
-        }
-        return !p.alwaysStock && p.secondaryStockCount === "0";
-      });
+      result = result.filter(p => !p.alwaysStock && p.secondaryStockCount === "0");
     } else if (stockFilter === "dead-stock") {
       const soldNamesNormalized = new Set(
         Object.keys(soldData).map(name => name.replace(/\s+/g, "").trim().toLowerCase())
@@ -2143,14 +2151,7 @@ export default function App() {
               >
                 <span className={`text-[10px] uppercase tracking-wider font-bold block ${stockFilter === "zero-stock" ? "text-rose-600" : "text-slate-400"}`}>缺貨產品</span>
                 <span className={`text-2xl font-black mt-1 block ${stockFilter === "zero-stock" ? "text-rose-750" : "text-rose-600"}`}>
-                  {products.filter(p => {
-                    if (p.allValues && p.allValues.length > 28) {
-                      const ab = (p.allValues[27] || "").trim();
-                      const ac = (p.allValues[28] || "").trim();
-                      return ab === "0" && ac === "0";
-                    }
-                    return !p.alwaysStock && p.secondaryStockCount === "0";
-                  }).length}
+                  {products.filter(p => !p.alwaysStock && p.secondaryStockCount === "0").length}
                 </span>
                 <span className={`text-[10px] block mt-1.5 font-medium ${stockFilter === "zero-stock" ? "text-rose-600" : "text-slate-500"}`}>
                   {stockFilter === "zero-stock" ? "✓ 正在篩選缺貨產品" : "點擊篩選缺貨"}
@@ -2332,36 +2333,48 @@ export default function App() {
                   <table className="w-full text-left text-xs text-slate-650 min-w-[500px]">
                     <thead className="bg-slate-50/85 text-[10px] text-slate-400 uppercase font-extrabold tracking-wider border-b border-slate-100">
                       <tr>
-                        <th className="px-4 py-3">圖片</th>
+                        <th className="px-4 py-3 text-center">操作</th>
                         <th className="px-4 py-3">商品名稱</th>
                         <th className="px-4 py-3 text-right">單價</th>
                         {stockFilter === "dead-stock" && (
                           <th className="px-4 py-3 text-right text-amber-700 bg-amber-50/30 font-bold">死貨估值</th>
                         )}
                         <th className="px-4 py-3 text-center">庫存狀態</th>
-                        <th className="px-4 py-3 text-center">操作</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {processedProducts.length === 0 ? (
                         <tr>
-                          <td colSpan={stockFilter === "dead-stock" ? 6 : 5} className="px-4 py-10 text-center text-slate-400 italic">
+                          <td colSpan={stockFilter === "dead-stock" ? 5 : 4} className="px-4 py-10 text-center text-slate-400 italic">
                             沒有與您的搜尋條件匹配的商品記錄。
                           </td>
                         </tr>
                       ) : (
                         processedProducts.slice(0, 50).map((prod) => (
                           <tr key={prod.id} className="hover:bg-slate-50/50 transition-all">
-                            <td className="px-4 py-2 shrink-0">
-                              <div className="w-10 h-10 rounded bg-slate-50 border border-slate-100 overflow-hidden relative">
-                                <ProductImage
-                                  id={prod.id}
-                                  name={prod.name}
-                                  fallbackUrl={prod.extraAttributes?.["Image URLs"]}
-                                  isOutOfStock={!prod.hasStock}
-                                  version={imageVersion}
-                                />
-                              </div>
+                            <td className="px-4 py-2 text-center">
+                              <button
+                                onClick={() => {
+                                  setSelectedProduct(prod);
+                                  // Wait tiny tick, then edit
+                                  setTimeout(() => {
+                                    setEditProductName(prod.name);
+                                    setEditProductPrice(prod.price);
+                                    setEditProductPriceA(prod.priceA || prod.price || "");
+                                    setEditProductPriceB(prod.priceB || prod.price || "");
+                                    setEditProductPriceC(prod.priceC || prod.price || "");
+                                    setEditProductQuantity(prod.alwaysStock ? "" : (prod.secondaryStockCount || ""));
+                                    setEditProductRemarks(prod.extraAttributes?.["Merchant Remark"] || prod.extraAttributes?.["remarks"] || "");
+                                    setEditProductImageFile(null);
+                                    setEditProductImagePreview("");
+                                    setIsEditingSelectedProduct(true);
+                                  }, 30);
+                                }}
+                                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-all font-bold text-[10px] inline-flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Edit className="w-3 h-3 text-indigo-500" />
+                                <span>編輯</span>
+                              </button>
                             </td>
                             <td className="px-4 py-2">
                               <div className="font-bold text-slate-800 line-clamp-1">{prod.name}</div>
@@ -2391,27 +2404,6 @@ export default function App() {
                                   暫無現貨
                                 </span>
                               )}
-                            </td>
-                            <td className="px-4 py-2 text-center">
-                              <button
-                                onClick={() => {
-                                  setSelectedProduct(prod);
-                                  // Wait tiny tick, then edit
-                                  setTimeout(() => {
-                                    setEditProductName(prod.name);
-                                    setEditProductPrice(prod.price);
-                                    setEditProductQuantity(prod.alwaysStock ? "" : (prod.secondaryStockCount || ""));
-                                    setEditProductRemarks(prod.extraAttributes?.["Merchant Remark"] || prod.extraAttributes?.["remarks"] || "");
-                                    setEditProductImageFile(null);
-                                    setEditProductImagePreview("");
-                                    setIsEditingSelectedProduct(true);
-                                  }, 30);
-                                }}
-                                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-all font-bold text-[10px] inline-flex items-center gap-1.5 cursor-pointer"
-                              >
-                                <Edit className="w-3 h-3 text-indigo-500" />
-                                <span>編輯</span>
-                              </button>
                             </td>
                           </tr>
                         ))
@@ -3121,18 +3113,44 @@ export default function App() {
                 {/* Right Col: Complex attributes listing */}
                 <div className="p-6 md:p-8 flex flex-col justify-between flex-grow">
                   <div className="space-y-4">
-                                        {/* Pricing Input */}
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                        單價 (HK$)
-                      </label>
-                      <input 
-                        type="text"
-                        placeholder="例如：61"
-                        value={editProductPrice}
-                        onChange={(e) => setEditProductPrice(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3.5 py-2.5 text-xs transition-all outline-none font-mono"
-                      />
+                    {/* Pricing Inputs: A 價, B 價, C 價 */}
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          A 價 (HK$)
+                        </label>
+                        <input 
+                          type="text"
+                          placeholder="例如：61"
+                          value={editProductPriceA}
+                          onChange={(e) => setEditProductPriceA(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3 py-2 text-xs transition-all outline-none font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          B 價 (HK$)
+                        </label>
+                        <input 
+                          type="text"
+                          placeholder="例如：58"
+                          value={editProductPriceB}
+                          onChange={(e) => setEditProductPriceB(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3 py-2 text-xs transition-all outline-none font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          C 價 (HK$)
+                        </label>
+                        <input 
+                          type="text"
+                          placeholder="例如：55"
+                          value={editProductPriceC}
+                          onChange={(e) => setEditProductPriceC(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3 py-2 text-xs transition-all outline-none font-mono"
+                        />
+                      </div>
                     </div>
 
                     {/* Quantity Input */}
@@ -4393,6 +4411,9 @@ function doPost(e) {
       var name = param.name;
       var id = param.id;
       var price = param.price;
+      var priceA = param.priceA;
+      var priceB = param.priceB;
+      var priceC = param.priceC;
       var quantity = param.quantity;
       var remarks = param.remarks;
       var username = param.username || "System";
@@ -4426,11 +4447,32 @@ function doPost(e) {
       
       // Update Price in Col O (Col 15) and set client tier prices (Col R/S/T) if present
       if (price !== undefined) {
-        var pNum = parseFloat(price.toString().replace(/[$,\\s]/g, '')) || 0;
+        var pNum = parseFloat(price.toString().replace(/[$,\s]/g, '')) || 0;
         sheet.getRange(rowToUpdate, 15).setValue(pNum); // Col O: Price
-        sheet.getRange(rowToUpdate, 18).setValue(pNum); // Col R: Gold Price
-        sheet.getRange(rowToUpdate, 19).setValue(pNum); // Col S: Silver Price
-        sheet.getRange(rowToUpdate, 20).setValue(pNum); // Col T: Basic Price
+      }
+      
+      if (priceA !== undefined) {
+        var pA = parseFloat(priceA.toString().replace(/[$,\s]/g, ''));
+        if (!isNaN(pA)) sheet.getRange(rowToUpdate, 18).setValue(pA); // Col R: A 價 (Gold Price)
+      } else if (price !== undefined) {
+        var pNum = parseFloat(price.toString().replace(/[$,\s]/g, '')) || 0;
+        sheet.getRange(rowToUpdate, 18).setValue(pNum);
+      }
+
+      if (priceB !== undefined) {
+        var pB = parseFloat(priceB.toString().replace(/[$,\s]/g, ''));
+        if (!isNaN(pB)) sheet.getRange(rowToUpdate, 19).setValue(pB); // Col S: B 價 (Silver Price)
+      } else if (price !== undefined) {
+        var pNum = parseFloat(price.toString().replace(/[$,\s]/g, '')) || 0;
+        sheet.getRange(rowToUpdate, 19).setValue(pNum);
+      }
+
+      if (priceC !== undefined) {
+        var pC = parseFloat(priceC.toString().replace(/[$,\s]/g, ''));
+        if (!isNaN(pC)) sheet.getRange(rowToUpdate, 20).setValue(pC); // Col T: C 價 (Basic Price)
+      } else if (price !== undefined) {
+        var pNum = parseFloat(price.toString().replace(/[$,\s]/g, '')) || 0;
+        sheet.getRange(rowToUpdate, 20).setValue(pNum);
       }
       
       var abVal = (quantity === "" || quantity === undefined) ? 1 : 0;

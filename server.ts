@@ -346,7 +346,7 @@ function saveSheetSettings(settings: any) {
   }
 }
 
-async function triggerSheetsSync(id: string, name: string, price: string, quantity: string, remarks: string, action: string = "addProduct") {
+async function triggerSheetsSync(id: string, name: string, price: string, quantity: string, remarks: string, action: string = "addProduct", priceA?: string, priceB?: string, priceC?: string) {
   const settings = getSheetSettings();
   if (settings.enabled && settings.appsScriptUrl) {
     try {
@@ -355,7 +355,7 @@ async function triggerSheetsSync(id: string, name: string, price: string, quanti
       const response = await fetch(settings.appsScriptUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, id, name, price, quantity, remarks })
+        body: JSON.stringify({ action, id, name, price, quantity, remarks, priceA, priceB, priceC })
       });
       const responseText = await response.text();
       console.log("Apps Script response:", responseText);
@@ -509,7 +509,7 @@ app.post("/api/products", (req, res) => {
 app.put("/api/products/:id", (req, res) => {
   try {
     const { id } = req.params;
-    const { name, price, quantity, remarks, base64Image } = req.body;
+    const { name, price, priceA, priceB, priceC, quantity, remarks, base64Image } = req.body;
     if (!name) {
       return res.status(400).json({ error: "Name is required" });
     }
@@ -535,11 +535,24 @@ app.put("/api/products/:id", (req, res) => {
     const existingIndex = localProducts.findIndex((p: any) => p.id === id);
 
     if (existingIndex !== -1) {
+      const updatedAllValues = [...(localProducts[existingIndex].allValues || [])];
+      if (updatedAllValues.length > 28) {
+        updatedAllValues[2] = name;
+        updatedAllValues[14] = price || "0";
+        updatedAllValues[17] = priceA || "0";
+        updatedAllValues[18] = priceB || "0";
+        updatedAllValues[19] = priceC || "0";
+        updatedAllValues[27] = alwaysStock ? "1" : "0";
+        updatedAllValues[28] = secondaryStockCount;
+      }
       // Update existing local product
       localProducts[existingIndex] = {
         ...localProducts[existingIndex],
         name,
         price: price || "0",
+        priceA: priceA || price || "0",
+        priceB: priceB || price || "0",
+        priceC: priceC || price || "0",
         hasStock,
         alwaysStock,
         secondaryStockCount,
@@ -547,7 +560,8 @@ app.put("/api/products/:id", (req, res) => {
           ...localProducts[existingIndex].extraAttributes,
           "Merchant Remark": remarks || "",
           "remarks": remarks || ""
-        }
+        },
+        allValues: updatedAllValues
       };
     } else {
       // It was a sheet product. Find it from sheet/backup cache and overwrite
@@ -561,10 +575,24 @@ app.put("/api/products/:id", (req, res) => {
         }
       }
 
+      const updatedAllValues = [...(sheetProduct?.allValues || [])];
+      if (updatedAllValues.length > 28) {
+        updatedAllValues[2] = name;
+        updatedAllValues[14] = price || "0";
+        updatedAllValues[17] = priceA || "0";
+        updatedAllValues[18] = priceB || "0";
+        updatedAllValues[19] = priceC || "0";
+        updatedAllValues[27] = alwaysStock ? "1" : "0";
+        updatedAllValues[28] = secondaryStockCount;
+      }
+
       const updatedProduct = {
         id,
         name,
         price: price || "0",
+        priceA: priceA || price || "0",
+        priceB: priceB || price || "0",
+        priceC: priceC || price || "0",
         hasStock,
         alwaysStock,
         secondaryStockCount,
@@ -573,7 +601,7 @@ app.put("/api/products/:id", (req, res) => {
           "Merchant Remark": remarks || "",
           "remarks": remarks || ""
         },
-        allValues: sheetProduct?.allValues || []
+        allValues: updatedAllValues
       };
 
       localProducts.unshift(updatedProduct);
@@ -582,7 +610,7 @@ app.put("/api/products/:id", (req, res) => {
     saveLocalProducts(localProducts);
 
     // Sync to Google Sheet if enabled
-    triggerSheetsSync(id, name, price || "0", quantity, remarks || "", "updateProduct");
+    triggerSheetsSync(id, name, price || "0", quantity, remarks || "", "updateProduct", priceA, priceB, priceC);
 
     res.json({ success: true, message: "Product updated successfully" });
   } catch (error: any) {
