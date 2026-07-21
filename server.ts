@@ -350,7 +350,7 @@ async function triggerSheetsSync(id: string, name: string, price: string, quanti
   const settings = getSheetSettings();
   if (settings.enabled && settings.appsScriptUrl) {
     try {
-      console.log(`Forwarding update to Google Sheets Apps Script Web App for id: ${id}, action: ${action}`);
+      console.log(`[triggerSheetsSync] Sync payload details:`, { action, id, name, price, quantity, remarks, priceA, priceB, priceC });
       // Use dynamic import for fetch if needed, but since NodeJS 18 has global fetch, we call it directly
       const response = await fetch(settings.appsScriptUrl, {
         method: "POST",
@@ -510,6 +510,7 @@ app.put("/api/products/:id", (req, res) => {
   try {
     const { id } = req.params;
     const { name, price, priceA, priceB, priceC, quantity, remarks, base64Image } = req.body;
+    console.log(`[PUT /api/products/${id}] Received body:`, { name, price, priceA, priceB, priceC, quantity, remarks });
     if (!name) {
       return res.status(400).json({ error: "Name is required" });
     }

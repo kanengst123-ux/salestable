@@ -1231,9 +1231,6 @@ export default function App() {
   const [isEditingSelectedProduct, setIsEditingSelectedProduct] = useState<boolean>(false);
   const [editProductName, setEditProductName] = useState<string>("");
   const [editProductPrice, setEditProductPrice] = useState<string>("");
-  const [editProductPriceA, setEditProductPriceA] = useState<string>("");
-  const [editProductPriceB, setEditProductPriceB] = useState<string>("");
-  const [editProductPriceC, setEditProductPriceC] = useState<string>("");
   const [editProductQuantity, setEditProductQuantity] = useState<string>("");
   const [editProductRemarks, setEditProductRemarks] = useState<string>("");
   const [editProductImageFile, setEditProductImageFile] = useState<File | null>(null);
@@ -1494,10 +1491,10 @@ export default function App() {
       const payload = {
         id: selectedProduct.id,
         name: editProductName.trim(),
-        price: editProductPriceA.trim() || "0",
-        priceA: editProductPriceA.trim(),
-        priceB: editProductPriceB.trim(),
-        priceC: editProductPriceC.trim(),
+        price: editProductPrice.trim() || "0",
+        priceA: editProductPrice.trim(),
+        priceB: editProductPrice.trim(),
+        priceC: editProductPrice.trim(),
         quantity: editProductQuantity.trim(),
         remarks: editProductRemarks.trim(),
         base64Image: editProductImagePreview.startsWith("data:image") ? editProductImagePreview : undefined
@@ -1528,20 +1525,20 @@ export default function App() {
       const updatedAllValues = [...(selectedProduct.allValues || [])];
       if (updatedAllValues.length > 28) {
         updatedAllValues[2] = editProductName.trim();
-        updatedAllValues[14] = editProductPriceA.trim() || "0";
-        updatedAllValues[17] = editProductPriceA.trim();
-        updatedAllValues[18] = editProductPriceB.trim();
-        updatedAllValues[19] = editProductPriceC.trim();
+        updatedAllValues[14] = editProductPrice.trim() || "0";
+        updatedAllValues[17] = editProductPrice.trim();
+        updatedAllValues[18] = editProductPrice.trim();
+        updatedAllValues[19] = editProductPrice.trim();
         updatedAllValues[27] = (isNaN(qtyNumber) || editProductQuantity.trim() === "") ? "1" : "0";
         updatedAllValues[28] = isNaN(qtyNumber) ? "" : qtyNumber.toString();
       }
       setSelectedProduct({
         ...selectedProduct,
         name: editProductName.trim(),
-        price: editProductPriceA.trim() || "0",
-        priceA: editProductPriceA.trim(),
-        priceB: editProductPriceB.trim(),
-        priceC: editProductPriceC.trim(),
+        price: editProductPrice.trim() || "0",
+        priceA: editProductPrice.trim(),
+        priceB: editProductPrice.trim(),
+        priceC: editProductPrice.trim(),
         hasStock: hasStock,
         alwaysStock: isNaN(qtyNumber) || editProductQuantity.trim() === "",
         secondaryStockCount: isNaN(qtyNumber) ? "" : qtyNumber.toString(),
@@ -1564,9 +1561,6 @@ export default function App() {
     if (!selectedProduct) return;
     setEditProductName(selectedProduct.name);
     setEditProductPrice(selectedProduct.price);
-    setEditProductPriceA(selectedProduct.priceA || selectedProduct.price || "");
-    setEditProductPriceB(selectedProduct.priceB || selectedProduct.price || "");
-    setEditProductPriceC(selectedProduct.priceC || selectedProduct.price || "");
     setEditProductQuantity(selectedProduct.alwaysStock ? "" : (selectedProduct.secondaryStockCount || ""));
     setEditProductRemarks(selectedProduct.extraAttributes?.["Merchant Remark"] || selectedProduct.extraAttributes?.["remarks"] || "");
     setEditProductImageFile(null);
@@ -2360,9 +2354,6 @@ export default function App() {
                                   setTimeout(() => {
                                     setEditProductName(prod.name);
                                     setEditProductPrice(prod.price);
-                                    setEditProductPriceA(prod.priceA || prod.price || "");
-                                    setEditProductPriceB(prod.priceB || prod.price || "");
-                                    setEditProductPriceC(prod.priceC || prod.price || "");
                                     setEditProductQuantity(prod.alwaysStock ? "" : (prod.secondaryStockCount || ""));
                                     setEditProductRemarks(prod.extraAttributes?.["Merchant Remark"] || prod.extraAttributes?.["remarks"] || "");
                                     setEditProductImageFile(null);
@@ -3113,44 +3104,18 @@ export default function App() {
                 {/* Right Col: Complex attributes listing */}
                 <div className="p-6 md:p-8 flex flex-col justify-between flex-grow">
                   <div className="space-y-4">
-                    {/* Pricing Inputs: A 價, B 價, C 價 */}
-                    <div className="grid grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                          A 價 (HK$)
-                        </label>
-                        <input 
-                          type="text"
-                          placeholder="例如：61"
-                          value={editProductPriceA}
-                          onChange={(e) => setEditProductPriceA(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3 py-2 text-xs transition-all outline-none font-mono"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                          B 價 (HK$)
-                        </label>
-                        <input 
-                          type="text"
-                          placeholder="例如：58"
-                          value={editProductPriceB}
-                          onChange={(e) => setEditProductPriceB(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3 py-2 text-xs transition-all outline-none font-mono"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                          C 價 (HK$)
-                        </label>
-                        <input 
-                          type="text"
-                          placeholder="例如：55"
-                          value={editProductPriceC}
-                          onChange={(e) => setEditProductPriceC(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3 py-2 text-xs transition-all outline-none font-mono"
-                        />
-                      </div>
+                    {/* Pricing Input: Single Price */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                        單價 (HK$)
+                      </label>
+                      <input 
+                        type="text"
+                        placeholder="例如：61"
+                        value={editProductPrice}
+                        onChange={(e) => setEditProductPrice(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3 py-2.5 text-xs transition-all outline-none font-mono"
+                      />
                     </div>
 
                     {/* Quantity Input */}
@@ -4450,7 +4415,7 @@ function doPost(e) {
         if (val === undefined || val === null || val.toString().trim() === "") {
           return NaN;
         }
-        var parsed = parseFloat(val.toString().replace(/[$,\s]/g, ''));
+        var parsed = parseFloat(val.toString().replace(/[$,\\s]/g, ''));
         return isNaN(parsed) ? NaN : parsed;
       }
 
@@ -4489,7 +4454,16 @@ function doPost(e) {
       
       return ContentService.createTextOutput(JSON.stringify({ 
         status: 'success', 
-        message: 'Product synced successfully in row ' + rowToUpdate 
+        message: 'Product synced successfully in row ' + rowToUpdate,
+        debug: {
+          price: price,
+          priceA: priceA,
+          priceB: priceB,
+          priceC: priceC,
+          pA: pA,
+          pB: pB,
+          pC: pC
+        }
       })).setMimeType(ContentService.MimeType.JSON);
     }
     
@@ -4834,9 +4808,9 @@ function doGet(e) {
           for (var j = 0; j < row.length; j++) {
             var cellStr = (row[j] || '').toString().toLowerCase().trim();
             var normed = cellStr.replace(/[\\s_-]/g, '');
-            if (cellStr.indexOf('gold') !== -1) goldIdx = j;
-            else if (cellStr.indexOf('silver') !== -1) silverIdx = j;
-            else if (cellStr.indexOf('basic') !== -1) basicIdx = j;
+            if (cellStr.indexOf('gold') !== -1 || cellStr.indexOf('a價') !== -1 || cellStr.indexOf('a 價') !== -1 || cellStr === 'a' || cellStr === 'a價') goldIdx = j;
+            else if (cellStr.indexOf('silver') !== -1 || cellStr.indexOf('b價') !== -1 || cellStr.indexOf('b 價') !== -1 || cellStr === 'b' || cellStr === 'b價') silverIdx = j;
+            else if (cellStr.indexOf('basic') !== -1 || cellStr.indexOf('c價') !== -1 || cellStr.indexOf('c 價') !== -1 || cellStr === 'c' || cellStr === 'c價') basicIdx = j;
             else if (normed === 'price') priceIdx = j;
             else if (normed === 'discountedprice') discountedPriceIdx = j;
             else if (normed.indexOf('unlimitedstock') !== -1) unlimitedIdx = j;
