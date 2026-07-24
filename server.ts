@@ -295,6 +295,65 @@ async function fetchCostCategories() {
   }
 }
 
+let promoCategoriesCache: string[] | null = null;
+let lastPromoFetchTime = 0;
+
+async function fetchPromoCategories() {
+  const now = Date.now();
+  if (promoCategoriesCache && (now - lastPromoFetchTime) < CACHE_DURATION) {
+    return promoCategoriesCache;
+  }
+
+  const url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=1674918009";
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Google Sheet Promo Tab: ${response.statusText}`);
+    }
+    const csvText = await response.text();
+    const rows = parseCSV(csvText);
+
+    const categoriesSet = new Set<string>();
+    // Header is row 0, Col K is index 10
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row && row.length > 10) {
+        const val = (row[10] || "").replace(/\r/g, "").trim();
+        if (val && val !== "des" && val !== "description") {
+          categoriesSet.add(val);
+        }
+      }
+    }
+
+    const categories = Array.from(categoriesSet);
+    promoCategoriesCache = categories;
+    lastPromoFetchTime = now;
+
+    try {
+      fs.writeFileSync("promo_categories_backup.json", JSON.stringify(promoCategoriesCache, null, 2));
+    } catch (e) {
+      console.error("Failed to write promo categories backup:", e);
+    }
+
+    return promoCategoriesCache;
+  } catch (error) {
+    console.error("Error fetching promo categories from Google Sheets, attempting backup:", error);
+    if (promoCategoriesCache) {
+      return promoCategoriesCache;
+    }
+    try {
+      if (fs.existsSync("promo_categories_backup.json")) {
+        const backupData = fs.readFileSync("promo_categories_backup.json", "utf-8");
+        promoCategoriesCache = JSON.parse(backupData);
+        return promoCategoriesCache!;
+      }
+    } catch (backupError) {
+      console.error("No valid promo categories backup found:", backupError);
+    }
+    return ['奶粉', '尿片', '中成藥/油', '藥品', '家品', '外用品', '品牌保健', '食品/飲品'];
+  }
+}
+
 // Local products persistence helpers
 const LOCAL_PRODUCTS_FILE = path.join(process.cwd(), "local_products.json");
 
@@ -346,16 +405,16 @@ function saveSheetSettings(settings: any) {
   }
 }
 
-async function triggerSheetsSync(id: string, name: string, price: string, quantity: string, remarks: string, action: string = "addProduct", priceA?: string, priceB?: string, priceC?: string) {
+async function triggerSheetsSync(id: string, name: string, price: string, quantity: string, remarks: string, action: string = "addProduct", priceA?: string, priceB?: string, priceC?: string, categorySymbol?: string) {
   const settings = getSheetSettings();
   if (settings.enabled && settings.appsScriptUrl) {
     try {
-      console.log(`[triggerSheetsSync] Sync payload details:`, { action, id, name, price, quantity, remarks, priceA, priceB, priceC });
+      console.log(`[triggerSheetsSync] Sync payload details:`, { action, id, name, price, quantity, remarks, priceA, priceB, priceC, categorySymbol });
       // Use dynamic import for fetch if needed, but since NodeJS 18 has global fetch, we call it directly
       const response = await fetch(settings.appsScriptUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, id, name, price, quantity, remarks, priceA, priceB, priceC })
+        body: JSON.stringify({ action, id, name, price, quantity, remarks, priceA, priceB, priceC, categorySymbol })
       });
       const responseText = await response.text();
       console.log("Apps Script response:", responseText);
@@ -452,9 +511,31 @@ app.post("/api/upload-image", async (req, res) => {
   }
 });
 
-app.post("/api/products", (req, res) => {
+function getSymbolForCategoryName(catName: string, symbolToName: Record<string, string>): string {
+  const normalized = (catName || "").trim().toLowerCase();
+  
+  if (normalized.includes("奶粉")) return "M";
+  if (normalized.includes("尿片")) return "D";
+  if (normalized.includes("中成藥")) return "C";
+  if (normalized.includes("外用品") || normalized.includes("外用")) return "E";
+  if (normalized.includes("食品") || normalized.includes("飲品")) return "F";
+  if (normalized.includes("家品")) return "H";
+  if (normalized.includes("保健") || normalized.includes("品牌保健")) return "S";
+  if (normalized.includes("藥品") || normalized.includes("成藥")) return "W";
+  if (normalized.includes("px")) return "X";
+
+  for (const [sym, name] of Object.entries(symbolToName)) {
+    const nameNorm = name.toLowerCase();
+    if (normalized.includes(nameNorm) || nameNorm.includes(normalized)) {
+      return sym;
+    }
+  }
+  return "S"; // default fallback is S (保健)
+}
+
+app.post("/api/products", async (req, res) => {
   try {
-    const { id, name, price, quantity, remarks, base64Image } = req.body;
+    const { id, name, price, quantity, remarks, base64Image, category } = req.body;
     if (!name) {
       return res.status(400).json({ error: "Name is required" });
     }
@@ -477,6 +558,16 @@ app.post("/api/products", (req, res) => {
     const hasStock = isNaN(qtyNumber) ? true : qtyNumber > 0;
     const secondaryStockCount = isNaN(qtyNumber) ? "" : qtyNumber.toString();
 
+    let catSymbol = "";
+    let catName = "";
+    try {
+      const costCategories = await fetchCostCategories();
+      catSymbol = getSymbolForCategoryName(category || "", costCategories.symbolToName);
+      catName = costCategories.symbolToName[catSymbol] || category || "";
+    } catch (e) {
+      console.error("Error determining category for manual add:", e);
+    }
+
     const newProduct = {
       id: finalId,
       name,
@@ -489,6 +580,8 @@ app.post("/api/products", (req, res) => {
         "Merchant Remark": remarks || "",
         "remarks": remarks || ""
       },
+      costCategorySymbol: catSymbol,
+      costCategoryName: catName,
       allValues: []
     };
 
@@ -496,8 +589,8 @@ app.post("/api/products", (req, res) => {
     localProducts.unshift(newProduct);
     saveLocalProducts(localProducts);
 
-    // Sync to Google Sheet if enabled
-    triggerSheetsSync(finalId, name, price || "0", quantity, remarks || "", "addProduct");
+    // Sync to Google Sheet if enabled - we pass catSymbol as the 10th parameter (categorySymbol)
+    triggerSheetsSync(finalId, name, price || "0", quantity, remarks || "", "addProduct", undefined, undefined, undefined, catSymbol);
 
     res.json({ success: true, product: newProduct });
   } catch (error: any) {
@@ -703,6 +796,7 @@ app.get("/api/products", async (req, res) => {
     if (forceRefresh) {
       lastFetchTime = 0; // invalidate memory sheet cache duration lookup
       lastCostFetchTime = 0; // invalidate memory cost cache duration lookup
+      lastPromoFetchTime = 0; // invalidate memory promo cache duration lookup
     }
     const sheetProducts = await fetchProductsFromSheet();
     const localProducts = getLocalProducts();
@@ -712,6 +806,13 @@ app.get("/api/products", async (req, res) => {
       costCategories = await fetchCostCategories();
     } catch (e) {
       console.error("Failed to fetch cost categories:", e);
+    }
+
+    let promoCategories: string[] = [];
+    try {
+      promoCategories = await fetchPromoCategories();
+    } catch (e) {
+      console.error("Failed to fetch promo categories:", e);
     }
     
     // Prevent duplicate entries: override any fetched sheet product with its local edited counterpart
@@ -730,10 +831,10 @@ app.get("/api/products", async (req, res) => {
       };
     });
     
-    res.json({ products: decoratedProducts, costCategories });
+    res.json({ products: decoratedProducts, costCategories, promoCategories });
   } catch (error) {
     console.error("Get products error:", error);
-    res.json({ products: getLocalProducts(), costCategories: { symbolToName: {}, productIdToSymbol: {} } });
+    res.json({ products: getLocalProducts(), costCategories: { symbolToName: {}, productIdToSymbol: {} }, promoCategories: [] });
   }
 });
 

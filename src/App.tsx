@@ -852,7 +852,7 @@ export default function App() {
       doc.setTextColor(226, 232, 240); // slate-200
       doc.text(`Price Tier: ${selectedPriceTier} 系列`, 105, 120, { align: "center" });
 
-      const costTabProducts = products.filter(p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "");
+      const costTabProducts = products.filter(p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "" && p.costCategorySymbol.trim().toUpperCase() !== "X");
 
       doc.setFontSize(10);
       doc.setTextColor(148, 163, 184); // slate-400
@@ -979,11 +979,13 @@ export default function App() {
           }
           doc.roundedRect(cx, cy, 43, 58, 2.5, 2.5, "FD");
 
-          // 2. Image inside Card
+          // 2. Image inside Card (Maximized: Height increased from 25 to 44)
+          const imgBoxW = 39;
+          const imgBoxH = 44;
           if (item.imgData) {
             try {
-              let imgW = 39;
-              let imgH = 25;
+              let imgW = imgBoxW;
+              let imgH = imgBoxH;
               let imgX = cx + 2;
               let imgY = cy + 2;
 
@@ -991,18 +993,18 @@ export default function App() {
               const originalH = item.height;
 
               if (originalW && originalH) {
-                const targetRatio = 39 / 25;
+                const targetRatio = imgBoxW / imgBoxH;
                 const imageRatio = originalW / originalH;
 
                 if (imageRatio > targetRatio) {
-                  imgW = 39;
-                  imgH = 39 / imageRatio;
+                  imgW = imgBoxW;
+                  imgH = imgBoxW / imageRatio;
                 } else {
-                  imgH = 25;
-                  imgW = 25 * imageRatio;
+                  imgH = imgBoxH;
+                  imgW = imgBoxH * imageRatio;
                 }
-                imgX = cx + 2 + (39 - imgW) / 2;
-                imgY = cy + 2 + (25 - imgH) / 2;
+                imgX = cx + 2 + (imgBoxW - imgW) / 2;
+                imgY = cy + 2 + (imgBoxH - imgH) / 2;
               }
 
               doc.addImage(item.imgData, item.format || "JPEG", imgX, imgY, imgW, imgH);
@@ -1013,7 +1015,7 @@ export default function App() {
                   const gState = new (doc as any).GState({ opacity: 0.55 });
                   doc.setGState(gState);
                   doc.setFillColor(220, 225, 230); // light slate overlay
-                  doc.rect(cx + 2, cy + 2, 39, 25, "F");
+                  doc.rect(cx + 2, cy + 2, imgBoxW, imgBoxH, "F");
                   doc.setGState(new (doc as any).GState({ opacity: 1.0 })); // reset
                 } catch (gStateErr) {
                   doc.setFillColor(241, 245, 249);
@@ -1023,169 +1025,68 @@ export default function App() {
               // Draw thin border over the image
               doc.setDrawColor(226, 232, 240);
               doc.setLineWidth(0.15);
-              doc.roundedRect(cx + 2, cy + 2, 39, 25, 2, 2, "S");
+              doc.roundedRect(cx + 2, cy + 2, imgBoxW, imgBoxH, 2, 2, "S");
             } catch (imgErr) {
               // Draw placeholder on failure
               doc.setFillColor(248, 250, 252);
               doc.setDrawColor(226, 232, 240);
               doc.setLineWidth(0.2);
-              doc.roundedRect(cx + 2, cy + 2, 39, 25, 2, 2, "FD");
+              doc.roundedRect(cx + 2, cy + 2, imgBoxW, imgBoxH, 2, 2, "FD");
               doc.setTextColor(148, 163, 184);
               doc.setFontSize(8);
-              doc.text("[ 圖片載入失敗 ]", cx + 21.5, cy + 14.5, { align: "center" });
+              doc.text("[ 圖片載入失敗 ]", cx + 21.5, cy + 2 + (imgBoxH / 2), { align: "center" });
             }
           } else {
             // Draw default placeholder
             doc.setFillColor(248, 250, 252);
             doc.setDrawColor(226, 232, 240);
             doc.setLineWidth(0.2);
-            doc.roundedRect(cx + 2, cy + 2, 39, 25, 2, 2, "FD");
+            doc.roundedRect(cx + 2, cy + 2, imgBoxW, imgBoxH, 2, 2, "FD");
             doc.setTextColor(148, 163, 184);
             doc.setFontSize(8);
-            doc.text("[ 暫無圖片 ]", cx + 21.5, cy + 14.5, { align: "center" });
+            doc.text("[ 暫無圖片 ]", cx + 21.5, cy + 2 + (imgBoxH / 2), { align: "center" });
           }
 
-          // 4. Product ID
+          // 3. Price Hovering at Bottom Right of the Picture
+          const priceVal = parseFloat(getProductPrice(p));
+          const priceStr = priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價";
+          
           doc.setFontSize(7.5);
-          if (isOutOfStock) {
-            doc.setTextColor(156, 163, 175); // grey-400
-          } else {
-            doc.setTextColor(100, 116, 139); // slate-500
-          }
-          doc.text(`編號: ${p.id}`, cx + 2.5, cy + 31);
+          const pWidth = doc.getTextWidth(priceStr);
+          const badgeW = pWidth + 3;
+          const badgeH = 5;
+          const badgeX = cx + 2 + imgBoxW - badgeW - 1;
+          const badgeY = cy + 2 + imgBoxH - badgeH - 1;
 
-          // 5. Product Name (wrap across up to 2 lines)
-          doc.setFontSize(8.5);
+          doc.setFillColor(255, 255, 255);
+          doc.setDrawColor(226, 232, 240);
+          doc.setLineWidth(0.15);
+          doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 0.8, 0.8, "FD");
+
+          if (isOutOfStock) {
+            doc.setTextColor(156, 163, 175);
+          } else {
+            doc.setTextColor(15, 23, 42); // slate-900
+          }
+          doc.setFontSize(7.5);
+          doc.text(priceStr, badgeX + 1.5, badgeY + 3.8);
+
+          // 4. Product Name at the Bottom of the card (cy + 48 to cy + 57)
+          doc.setFontSize(8.2);
           if (isOutOfStock) {
             doc.setTextColor(156, 163, 175); // grey-400
           } else {
             doc.setTextColor(15, 23, 42); // slate-900
           }
-          const wrappedName = doc.splitTextToSize(p.name, 38);
+          const wrappedName = doc.splitTextToSize(p.name, 39);
           const line1 = wrappedName[0] || "";
           let line2 = wrappedName[1] || "";
           if (wrappedName.length > 2) {
             line2 = line2.substring(0, Math.max(0, line2.length - 2)) + "...";
           }
-          doc.text(line1, cx + 2.5, cy + 36);
+          doc.text(line1, cx + 2, cy + 50);
           if (line2) {
-            doc.text(line2, cx + 2.5, cy + 40);
-          }
-
-          // 6. Category Pill Badge (Col M Categories from sheet)
-          const mLabel = p.extraAttributes?.["Categories"]?.trim();
-          if (mLabel) {
-            let catText = mLabel;
-            if (catText.length > 15) {
-              catText = catText.substring(0, 14) + "...";
-            }
-            if (isOutOfStock) {
-              doc.setFillColor(243, 244, 246); // grey-100
-              doc.setDrawColor(229, 231, 235); // grey-200 border
-              doc.setLineWidth(0.15);
-              doc.roundedRect(cx + 2.5, cy + 43.5, 24, 4, 0.8, 0.8, "FD");
-              doc.setTextColor(156, 163, 175); // grey-400
-            } else {
-              doc.setFillColor(254, 243, 199); // amber-100
-              doc.setDrawColor(251, 191, 36); // amber-400 border
-              doc.setLineWidth(0.15);
-              doc.roundedRect(cx + 2.5, cy + 43.5, 24, 4, 0.8, 0.8, "FD");
-              doc.setTextColor(180, 83, 9); // amber-800 font
-            }
-            doc.setFontSize(6.5);
-            doc.text(catText, cx + 14.5, cy + 46.4, { align: "center" });
-          }
-
-          // 7. Price Label and Price
-          if (isOutOfStock) {
-            doc.setTextColor(209, 213, 219); // grey-300
-          } else {
-            doc.setTextColor(148, 163, 184); // slate-400
-          }
-          doc.setFontSize(7);
-          doc.text("售價", cx + 2.5, cy + 50.5);
-
-          if (isOutOfStock) {
-            doc.setTextColor(156, 163, 175); // grey-400
-          } else {
-            doc.setTextColor(15, 23, 42); // slate-900
-          }
-          doc.setFontSize(10);
-          const priceVal = parseFloat(getProductPrice(p));
-          const priceStr = priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "價格由詢問決定";
-          doc.text(priceStr, cx + 2.5, cy + 55);
-
-          // Price Tier Label Square next to price
-          if (priceVal > 0) {
-            const priceWidth = doc.getTextWidth(priceStr);
-            const x_tier = cx + 2.5 + priceWidth + 1.5;
-            const y_tier = cy + 51.5;
-            if (isOutOfStock) {
-              doc.setFillColor(243, 244, 246); // grey-100
-              doc.setDrawColor(229, 231, 235); // grey-200 border
-              doc.setLineWidth(0.15);
-              doc.roundedRect(x_tier, y_tier, 4, 4, 0.5, 0.5, "FD");
-              doc.setTextColor(156, 163, 175); // grey-400
-            } else {
-              doc.setFillColor(239, 246, 255); // slate-50/blue-50
-              doc.setDrawColor(191, 219, 254); // blue-200 border
-              doc.setLineWidth(0.15);
-              doc.roundedRect(x_tier, y_tier, 4, 4, 0.5, 0.5, "FD");
-              doc.setTextColor(37, 99, 235); // blue-600
-            }
-            doc.setFontSize(7);
-            doc.text(selectedPriceTier, x_tier + 2, y_tier + 2.9, { align: "center" });
-          }
-
-          // 8. Visual Vector Cart Button (bottom-right)
-          const cartCX = cx + 38;
-          const cartCY = cy + 52.5;
-          if (isOutOfStock) {
-            doc.setFillColor(249, 250, 251); // extremely light off-white
-            doc.setDrawColor(243, 244, 246); // soft gray border
-            doc.setLineWidth(0.2);
-            doc.circle(cartCX, cartCY, 3, "FD");
-
-            // Vector Shopping Cart Outline (Muted Grey)
-            doc.setDrawColor(209, 213, 219); // grey-300
-            doc.setLineWidth(0.15);
-            // Basket bottom
-            doc.line(cartCX - 1.2, cartCY + 0.7, cartCX + 0.6, cartCY + 0.7);
-            // Basket back
-            doc.line(cartCX - 1.2, cartCY + 0.7, cartCX - 1.8, cartCY - 0.9);
-            // Basket front
-            doc.line(cartCX + 0.6, cartCY + 0.7, cartCX + 1.2, cartCY - 0.9);
-            // Basket top
-            doc.line(cartCX - 1.8, cartCY - 0.9, cartCX + 1.2, cartCY - 0.9);
-            // Handle
-            doc.line(cartCX - 1.8, cartCY - 0.9, cartCX - 2.3, cartCY - 0.9);
-            // Wheels
-            doc.setFillColor(209, 213, 219);
-            doc.circle(cartCX - 0.9, cartCY + 1.3, 0.3, "F");
-            doc.circle(cartCX + 0.4, cartCY + 1.3, 0.3, "F");
-          } else {
-            doc.setFillColor(255, 255, 255);
-            doc.setDrawColor(226, 232, 240); // slate-200 border
-            doc.setLineWidth(0.2);
-            doc.circle(cartCX, cartCY, 3, "FD");
-
-            // Vector Shopping Cart Outline
-            doc.setDrawColor(100, 116, 139); // slate-500
-            doc.setLineWidth(0.15);
-            // Basket bottom
-            doc.line(cartCX - 1.2, cartCY + 0.7, cartCX + 0.6, cartCY + 0.7);
-            // Basket back
-            doc.line(cartCX - 1.2, cartCY + 0.7, cartCX - 1.8, cartCY - 0.9);
-            // Basket front
-            doc.line(cartCX + 0.6, cartCY + 0.7, cartCX + 1.2, cartCY - 0.9);
-            // Basket top
-            doc.line(cartCX - 1.8, cartCY - 0.9, cartCX + 1.2, cartCY - 0.9);
-            // Handle
-            doc.line(cartCX - 1.8, cartCY - 0.9, cartCX - 2.3, cartCY - 0.9);
-            // Wheels
-            doc.setFillColor(100, 116, 139);
-            doc.circle(cartCX - 0.9, cartCY + 1.3, 0.3, "F");
-            doc.circle(cartCX + 0.4, cartCY + 1.3, 0.3, "F");
+            doc.text(line2, cx + 2, cy + 54);
           }
         });
       }
@@ -1226,6 +1127,8 @@ export default function App() {
   const [newProductImageFile, setNewProductImageFile] = useState<File | null>(null);
   const [newProductImagePreview, setNewProductImagePreview] = useState<string>("");
   const [isSubmittingProduct, setIsSubmittingProduct] = useState<boolean>(false);
+  const [promoCategories, setPromoCategories] = useState<string[]>([]);
+  const [newProductCategory, setNewProductCategory] = useState<string>("");
 
   // Edit Product States
   const [isEditingSelectedProduct, setIsEditingSelectedProduct] = useState<boolean>(false);
@@ -1425,7 +1328,8 @@ export default function App() {
         price: newProductPrice.trim() || "0",
         quantity: newProductQuantity.trim(),
         remarks: newProductRemarks.trim(),
-        base64Image: newProductImagePreview
+        base64Image: newProductImagePreview,
+        category: newProductCategory
       };
 
       const res = await fetch("/api/products", {
@@ -1448,6 +1352,7 @@ export default function App() {
       setNewProductPrice("");
       setNewProductQuantity("");
       setNewProductRemarks("");
+      setNewProductCategory("");
       setNewProductImageFile(null);
       setNewProductImagePreview("");
       
@@ -1620,6 +1525,9 @@ export default function App() {
           if (data.costCategories) {
             localStorage.setItem("cached_cost_categories", JSON.stringify(data.costCategories));
           }
+          if (data.promoCategories) {
+            localStorage.setItem("cached_promo_categories", JSON.stringify(data.promoCategories));
+          }
           localStorage.setItem("cached_sync_time", new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
         } catch (e) {
           console.warn("Storage write failed (offline caching skipped):", e);
@@ -1630,6 +1538,9 @@ export default function App() {
         if (data.costCategories) {
           setCostCategories(data.costCategories);
         }
+        if (data.promoCategories) {
+          setPromoCategories(data.promoCategories);
+        }
         setSyncTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       } else {
         throw new Error("Invalid format returned by server");
@@ -1639,6 +1550,7 @@ export default function App() {
       try {
         const cachedProductsStr = localStorage.getItem("cached_products");
         const cachedCostStr = localStorage.getItem("cached_cost_categories");
+        const cachedPromoStr = localStorage.getItem("cached_promo_categories");
         const cachedSyncTimeStr = localStorage.getItem("cached_sync_time");
         const cachedSoldStr = localStorage.getItem("cached_sold_data");
 
@@ -1656,6 +1568,13 @@ export default function App() {
           setUsingOfflineBackup(true);
           if (cachedCostStr) {
             setCostCategories(JSON.parse(cachedCostStr));
+          }
+          if (cachedPromoStr) {
+            try {
+              setPromoCategories(JSON.parse(cachedPromoStr));
+            } catch (e) {
+              console.warn("Parsing cached promo categories failed:", e);
+            }
           }
           if (cachedSyncTimeStr) {
             setSyncTime(cachedSyncTimeStr + " (離線快照)");
@@ -2910,13 +2829,11 @@ export default function App() {
                   {paginatedProducts.map(product => (
                     <article
                       key={product.id}
-                      className={`group bg-white rounded-2xl border hover:border-slate-300 transition-all shadow-[0_2px_8px_rgba(0,0,0,0.01)] hover:shadow-md flex flex-col overflow-hidden relative ${!product.hasStock ? "opacity-80" : ""}`}
+                      onClick={() => setSelectedProduct(product)}
+                      className={`group bg-white rounded-2xl border hover:border-slate-300 transition-all shadow-[0_2px_8px_rgba(0,0,0,0.01)] hover:shadow-md flex flex-col overflow-hidden relative cursor-pointer ${!product.hasStock ? "opacity-80" : ""}`}
                     >
                       {/* Interactive click triggers modal */}
-                      <div 
-                        onClick={() => setSelectedProduct(product)}
-                        className="cursor-pointer relative aspect-square bg-slate-50 overflow-hidden shrink-0"
-                      >
+                      <div className="relative aspect-square bg-slate-50 overflow-hidden shrink-0">
                         <ProductImage
                           id={product.id}
                           name={product.name}
@@ -2942,6 +2859,24 @@ export default function App() {
                           )}
                         </div>
 
+                        {/* Price Hovering at the Bottom Right of the Picture */}
+                        <div className="absolute bottom-3 right-3 z-10">
+                          <div className="bg-slate-900/90 backdrop-blur-md text-white border border-slate-700/30 px-2.5 py-1 rounded-xl text-xs font-black shadow-lg flex items-center gap-1.5 transition-all group-hover:scale-105">
+                            {parseFloat(getProductPrice(product)) > 0 ? (
+                              <>
+                                <span className="font-extrabold tracking-tight">HK${parseFloat(getProductPrice(product)).toFixed(2)}</span>
+                                {selectedPriceTier && (
+                                  <span className="text-[9px] font-extrabold text-indigo-200 bg-indigo-900/60 border border-indigo-700/50 rounded px-1.5 py-0.5">
+                                    {selectedPriceTier}
+                                  </span>
+                                )}
+                              </>
+                            ) : (
+                              <span className="text-[10px] font-bold text-rose-300">請詢價</span>
+                            )}
+                          </div>
+                        </div>
+
                         {/* Hover Overlay info guide */}
                         <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center gap-2">
                           <span className="px-3 py-1.5 rounded-xl bg-white text-slate-900 font-bold text-xs shadow-md">
@@ -2950,64 +2885,22 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Info & pricing area */}
-                      <div className="p-4 flex-grow flex flex-col justify-between space-y-3">
-                        <div className="space-y-1">
-                          <span className="text-[10px] font-mono text-slate-400 tracking-wider block font-semibold uppercase">
-                            編號: {product.id}
-                          </span>
-                          <h4 
-                            onClick={() => setSelectedProduct(product)}
-                            className="font-bold text-slate-800 text-xs md:text-sm line-clamp-2 hover:text-indigo-600 cursor-pointer transition-colors leading-snug"
-                            title={product.name}
-                          >
-                            {product.name}
-                          </h4>
-                          {product.extraAttributes["Categories"] && (
-                            <span className="inline-block text-[11px] font-medium text-indigo-600 bg-indigo-50/50 border border-indigo-100/50 rounded-md px-1.5 py-0.5">
-                              {product.extraAttributes["Categories"].trim()}
-                            </span>
-                          )}
-                          {stockFilter === "dead-stock" && (
-                            <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] font-bold text-amber-700 bg-amber-50/70 border border-amber-100 rounded-lg px-2 py-1">
-                              <span>死貨估值 (庫存 × 售價):</span>
-                              <span className="text-xs font-black text-amber-800">
-                                HK${((parseInt(product.secondaryStockCount, 10) || 0) * (parseFloat(getProductPrice(product)) || 0)).toFixed(2)}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="pt-2 border-t border-slate-50 flex items-center justify-between gap-2">
-                          <div className="flex flex-col">
-                            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">售價</span>
-                            <span className="font-extrabold text-slate-900 text-sm md:text-base">
-                              {parseFloat(getProductPrice(product)) > 0 ? (
-                                <span className="flex items-center gap-1.5">
-                                  <span>HK${parseFloat(getProductPrice(product)).toFixed(2)}</span>
-                                  {selectedPriceTier && (
-                                    <span className="text-[9px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-1 py-0.2">
-                                      {selectedPriceTier}
-                                    </span>
-                                  )}
-                                </span>
-                              ) : (
-                                <span className="text-[11px] font-black text-rose-500 bg-rose-50 px-1 py-0.5 rounded">價格由詢價決定</span>
-                              )}
+                      {/* Only showing product name at the bottom */}
+                      <div className="p-3.5 bg-white flex-grow flex flex-col justify-center min-h-[56px]">
+                        <h4 
+                          className="font-bold text-slate-800 text-xs md:text-sm line-clamp-2 hover:text-indigo-600 cursor-pointer transition-colors leading-snug"
+                          title={product.name}
+                        >
+                          {product.name}
+                        </h4>
+                        {stockFilter === "dead-stock" && (
+                          <div className="mt-1.5 flex flex-col gap-0.5 text-[10px] font-bold text-amber-700 bg-amber-50/70 border border-amber-100 rounded-lg px-2 py-1">
+                            <span>死貨估值 (庫存 × 售價):</span>
+                            <span className="text-xs font-black text-amber-800">
+                              HK${((parseInt(product.secondaryStockCount, 10) || 0) * (parseFloat(getProductPrice(product)) || 0)).toFixed(2)}
                             </span>
                           </div>
-
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              addToCart(product, 1);
-                            }}
-                            className="p-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-all font-bold"
-                            title="添加到詢價單"
-                          >
-                            <ShoppingCart className="w-4 h-4" />
-                          </button>
-                        </div>
+                        )}
                       </div>
                     </article>
                   ))}
@@ -4201,6 +4094,36 @@ export default function App() {
                   />
                 </div>
 
+                {/* Category Selection */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                    分類標籤 *
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {(promoCategories.length > 0 ? promoCategories : ['奶粉', '尿片', '中成藥/油', '藥品', '家品', '外用品', '品牌保健', '食品/飲品']).map((cat) => {
+                      const isSelected = newProductCategory === cat;
+                      return (
+                        <button
+                          key={cat}
+                          type="button"
+                          onClick={() => setNewProductCategory(isSelected ? "" : cat)}
+                          className={`py-1.5 px-3 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 border ${
+                            isSelected 
+                              ? "bg-indigo-50 border-indigo-200 text-indigo-700 shadow-sm font-bold"
+                              : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-800"
+                          }`}
+                        >
+                          <span className={`w-2 h-2 rounded-full ${isSelected ? "bg-indigo-600 animate-pulse" : "bg-slate-300"}`} />
+                          {cat}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <span className="text-[10px] text-slate-400 mt-1.5 block font-medium leading-normal">
+                    請點選適用於此商品的分類（載入自 promo 分頁之 Col K，將同步寫入 Cost 成本表）
+                  </span>
+                </div>
+
                 {/* Quantity */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
@@ -4408,6 +4331,27 @@ function doPost(e) {
       } else {
         sheet.getRange(rowToUpdate, 2).setValue(id || "");
         sheet.getRange(rowToUpdate, 3).setValue(name || "");
+      }
+      
+      // Sync to Cost tab if categorySymbol is provided
+      var categorySymbol = param.categorySymbol;
+      if (categorySymbol) {
+        var costSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Cost');
+        if (costSheet) {
+          var costData = costSheet.getDataRange().getValues();
+          var costFoundIndex = -1;
+          for (var k = 1; k < costData.length; k++) {
+            var costRowId = (costData[k][0] || "").toString().trim();
+            if (id && costRowId === id.toString().trim()) {
+              costFoundIndex = k;
+              break;
+            }
+          }
+          var costRowToUpdate = costFoundIndex !== -1 ? costFoundIndex + 1 : costSheet.getLastRow() + 1;
+          costSheet.getRange(costRowToUpdate, 1).setValue(id || "");
+          costSheet.getRange(costRowToUpdate, 2).setValue(categorySymbol || "");
+          costSheet.getRange(costRowToUpdate, 3).setValue(name || "");
+        }
       }
       
       // Safe function to parse numeric price values and prevent crashes on empty/null inputs
@@ -5344,9 +5288,6 @@ function revertStockForOrders(orderIdsMap) {
                     </div>
                     {/* Info */}
                     <div className="space-y-1.5 min-w-0 flex-grow">
-                      <span className="text-[10px] font-mono font-bold text-slate-400 block uppercase tracking-wide">
-                        SKU ID: {p.id}
-                      </span>
                       <h4 className="font-bold text-sm text-slate-800 leading-snug">{p.name}</h4>
                       <div className="text-sm font-black text-slate-900">
                         {parseFloat(getProductPrice(p)) > 0 ? (
