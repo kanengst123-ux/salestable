@@ -11,6 +11,7 @@ if (typeof window !== "undefined" && "serviceWorker" in navigator) {
         .register("/sw.js")
         .then((registration) => {
           console.log("ServiceWorker successfully registered with scope:", registration.scope);
+          registration.update();
         })
         .catch((error) => {
           console.warn("ServiceWorker registration failed:", error);

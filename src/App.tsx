@@ -441,7 +441,7 @@ export default function App() {
   // Group products by top category for Catalog and PDF generation
   const productsByCategory = useMemo(() => {
     const groups: Record<string, Product[]> = {};
-    const costProducts = products.filter(p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "");
+    const costProducts = products.filter(p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "" && p.costCategorySymbol.trim().toUpperCase() !== "X");
     costProducts.forEach(p => {
       const cat = p.costCategoryName?.trim() || p.extraAttributes?.["Categories"]?.split("/")[0]?.trim() || "其他分類";
       if (!groups[cat]) {
@@ -1091,7 +1091,8 @@ export default function App() {
         });
       }
 
-      doc.save(`Product_Catalog_Price_Tier_${selectedPriceTier}.pdf`);
+      const dateStr = new Date().toISOString().slice(0, 10);
+      doc.save(`Product_Catalog_Price_Tier_${selectedPriceTier}_${dateStr}.pdf`);
       showToast("PDF 商品目錄導出成功！");
     } catch (error) {
       console.error("PDF export failed:", error);
@@ -1746,9 +1747,9 @@ export default function App() {
   const processedProducts = useMemo(() => {
     let result = [...products];
 
-    // Restrict customer catalog mode to products in the 'cost' tab of the Google Sheet
+    // Restrict customer catalog mode to products in the 'cost' tab of the Google Sheet (excluding category X)
     if (viewMode === "customer") {
-      result = result.filter(p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "");
+      result = result.filter(p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "" && p.costCategorySymbol.trim().toUpperCase() !== "X");
     }
 
     // 1. Search Query Filter
