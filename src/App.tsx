@@ -522,7 +522,10 @@ export default function App() {
     });
 
     orderedCatNames.forEach(catName => {
-      groups[catName] = mainGroups[catName];
+      groups[catName] = mainGroups[catName].map(p => ({
+        ...p,
+        costCategoryName: catName
+      }));
     });
 
     return groups;
@@ -1136,7 +1139,31 @@ export default function App() {
             doc.text("[ 暫無圖片 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
           }
 
-          // 3. Price Hovering at Bottom LEFT Corner of the Picture
+          // 3. Category Header Tag hovering at Top LEFT Corner of the Picture
+          const catTagLabel = p.costCategoryName || p.extraAttributes?.["Categories"]?.split("/")[0]?.trim() || "";
+          if (catTagLabel) {
+            doc.setFontSize(6.5);
+            doc.setTextColor(255, 255, 255);
+            const catWidth = doc.getTextWidth(catTagLabel);
+            const catBadgeW = catWidth + 3;
+            const catBadgeH = 4.2;
+            const catBadgeX = imgX_base + 1;
+            const catBadgeY = imgY_base + 1;
+
+            if (["新貨", "清貨", "季度熱賣"].includes(catTagLabel)) {
+              doc.setFillColor(180, 83, 9); // Amber-700
+            } else {
+              doc.setFillColor(30, 41, 59); // Slate-800
+            }
+            doc.setDrawColor(255, 255, 255);
+            doc.setLineWidth(0.15);
+            doc.roundedRect(catBadgeX, catBadgeY, catBadgeW, catBadgeH, 0.6, 0.6, "FD");
+
+            doc.setFontSize(6.5);
+            doc.text(catTagLabel, catBadgeX + 1.5, catBadgeY + 3.1);
+          }
+
+          // 4. Price Hovering at Bottom LEFT Corner of the Picture
           const priceVal = parseFloat(getProductPrice(p));
           const priceStr = priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價";
           
@@ -1160,7 +1187,7 @@ export default function App() {
           doc.setFontSize(7.5);
           doc.text(priceStr, badgeX + 1.5, badgeY + 3.7);
 
-          // 4. Product Name at the Bottom of the card
+          // 5. Product Name at the Bottom of the card
           doc.setFontSize(8);
           if (isOutOfStock) {
             doc.setTextColor(156, 163, 175); // grey-400
@@ -5261,7 +5288,7 @@ function revertStockForOrders(orderIdsMap) {
                             }`}
                             style={!p.hasStock ? undefined : hasCategoryLabel ? { borderColor: "#d4af37", borderWidth: "1.5px" } : undefined}
                           >
-                            {/* Photo Container with Price hovering at bottom-left */}
+                            {/* Photo Container with Category hovering at top-left & Price hovering at bottom-left */}
                             <div className="w-full aspect-[4/5] rounded-lg bg-slate-50 border border-slate-150 overflow-hidden shrink-0 relative">
                               <ProductImage
                                 id={p.id}
@@ -5270,6 +5297,15 @@ function revertStockForOrders(orderIdsMap) {
                                 isOutOfStock={!p.hasStock}
                                 version={imageVersion}
                               />
+                              {(p.costCategoryName || catName) && (
+                                <div className={`absolute top-1.5 left-1.5 z-10 text-white border px-1.5 py-0.5 rounded text-[9px] font-bold shadow-2xs ${
+                                  ["新貨", "清貨", "季度熱賣"].includes(p.costCategoryName || catName)
+                                    ? "bg-amber-600/95 border-amber-500/80"
+                                    : "bg-slate-800/95 border-slate-700/80"
+                                }`}>
+                                  {p.costCategoryName || catName}
+                                </div>
+                              )}
                               <div className="absolute bottom-1.5 left-1.5 z-10 bg-white/95 backdrop-blur-xs text-slate-900 border border-slate-200/80 px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-black shadow-2xs">
                                 {priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價"}
                               </div>
@@ -5353,7 +5389,7 @@ function revertStockForOrders(orderIdsMap) {
                     }`}
                     style={!p.hasStock ? undefined : hasCategoryLabel ? { borderColor: "#d4af37", borderWidth: "1.5px" } : undefined}
                   >
-                    {/* Photo Container with Price hovering at bottom-left */}
+                    {/* Photo Container with Category hovering at top-left & Price hovering at bottom-left */}
                     <div className="w-full aspect-[4/5] rounded-lg bg-slate-50 border border-slate-150 overflow-hidden shrink-0 relative">
                       <ProductImage
                         id={p.id}
@@ -5362,6 +5398,15 @@ function revertStockForOrders(orderIdsMap) {
                         isOutOfStock={!p.hasStock}
                         version={imageVersion}
                       />
+                      {(p.costCategoryName || catName) && (
+                        <div className={`absolute top-1.5 left-1.5 z-10 text-white border px-1.5 py-0.5 rounded text-[9px] font-bold shadow-2xs ${
+                          ["新貨", "清貨", "季度熱賣"].includes(p.costCategoryName || catName)
+                            ? "bg-amber-600/95 border-amber-500/80"
+                            : "bg-slate-800/95 border-slate-700/80"
+                        }`}>
+                          {p.costCategoryName || catName}
+                        </div>
+                      )}
                       <div className="absolute bottom-1.5 left-1.5 z-10 bg-white/95 backdrop-blur-xs text-slate-900 border border-slate-200/80 px-1.5 py-0.5 rounded text-[11px] font-black shadow-2xs">
                         {priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價"}
                       </div>
