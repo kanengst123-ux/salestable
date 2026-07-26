@@ -935,29 +935,36 @@ export default function App() {
           doc.setFont("helvetica", "normal");
         }
 
-        // Draw elegant page header
-        doc.setFontSize(10);
+        // Draw page header
+        doc.setFontSize(9);
         doc.setTextColor(15, 23, 42); // slate-900
-        doc.text("商品目錄 / Product Catalog", 12, 12);
+        doc.text("商品目錄 / Product Catalog", 6, 9);
         
-        doc.setFontSize(8);
+        doc.setFontSize(7.5);
         doc.setTextColor(100, 116, 139); // slate-500
-        doc.text(`Price Tier: ${selectedPriceTier} 系列 | 產出日期: ${nowStr}`, 105, 12, { align: "center" });
-        doc.text(`頁碼: ${pageNum} / ${totalPages + 1}`, 198, 12, { align: "right" });
+        doc.text(`Price Tier: ${selectedPriceTier} 系列 | 產出日期: ${nowStr}`, 105, 9, { align: "center" });
+        doc.text(`頁碼: ${pageNum} / ${totalPages + 1}`, 204, 9, { align: "right" });
 
         // Divider line
         doc.setDrawColor(226, 232, 240);
         doc.setLineWidth(0.3);
-        doc.line(12, 15, 198, 15);
+        doc.line(6, 11, 204, 11);
 
         const startIndex = pageIdx * productsPerPage;
         const pageProducts = processedProducts.slice(startIndex, startIndex + productsPerPage);
 
+        const startX = 6;
+        const startY = 13;
+        const cardW = 47.5;
+        const cardH = 65.5;
+        const gapX = 3;
+        const gapY = 3.5;
+
         pageProducts.forEach((item, index) => {
           const row = Math.floor(index / 4);
           const col = index % 4;
-          const cx = 10 + col * (43 + 6);
-          const cy = 20 + row * (58 + 10);
+          const cx = startX + col * (cardW + gapX);
+          const cy = startY + row * (cardH + gapY);
 
           const p = item.product;
           const isOutOfStock = !p.hasStock;
@@ -977,17 +984,21 @@ export default function App() {
             doc.setLineWidth(0.35);
             doc.setFillColor(255, 255, 255); // white card body
           }
-          doc.roundedRect(cx, cy, 43, 58, 2.5, 2.5, "FD");
+          doc.roundedRect(cx, cy, cardW, cardH, 2, 2, "FD");
 
-          // 2. Image inside Card (Maximized: Height increased from 25 to 44)
-          const imgBoxW = 39;
-          const imgBoxH = 44;
+          // 2. Image inside Card (Maximized Picture Box)
+          const pad = 1.5;
+          const imgBoxW = cardW - (pad * 2); // 44.5 mm
+          const imgBoxH = 51.5; // 51.5 mm
+          const imgX_base = cx + pad;
+          const imgY_base = cy + pad;
+
           if (item.imgData) {
             try {
               let imgW = imgBoxW;
               let imgH = imgBoxH;
-              let imgX = cx + 2;
-              let imgY = cy + 2;
+              let imgX = imgX_base;
+              let imgY = imgY_base;
 
               const originalW = item.width;
               const originalH = item.height;
@@ -1003,8 +1014,8 @@ export default function App() {
                   imgH = imgBoxH;
                   imgW = imgBoxH * imageRatio;
                 }
-                imgX = cx + 2 + (imgBoxW - imgW) / 2;
-                imgY = cy + 2 + (imgBoxH - imgH) / 2;
+                imgX = imgX_base + (imgBoxW - imgW) / 2;
+                imgY = imgY_base + (imgBoxH - imgH) / 2;
               }
 
               doc.addImage(item.imgData, item.format || "JPEG", imgX, imgY, imgW, imgH);
@@ -1015,7 +1026,7 @@ export default function App() {
                   const gState = new (doc as any).GState({ opacity: 0.55 });
                   doc.setGState(gState);
                   doc.setFillColor(220, 225, 230); // light slate overlay
-                  doc.rect(cx + 2, cy + 2, imgBoxW, imgBoxH, "F");
+                  doc.rect(imgX_base, imgY_base, imgBoxW, imgBoxH, "F");
                   doc.setGState(new (doc as any).GState({ opacity: 1.0 })); // reset
                 } catch (gStateErr) {
                   doc.setFillColor(241, 245, 249);
@@ -1025,29 +1036,29 @@ export default function App() {
               // Draw thin border over the image
               doc.setDrawColor(226, 232, 240);
               doc.setLineWidth(0.15);
-              doc.roundedRect(cx + 2, cy + 2, imgBoxW, imgBoxH, 2, 2, "S");
+              doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "S");
             } catch (imgErr) {
               // Draw placeholder on failure
               doc.setFillColor(248, 250, 252);
               doc.setDrawColor(226, 232, 240);
               doc.setLineWidth(0.2);
-              doc.roundedRect(cx + 2, cy + 2, imgBoxW, imgBoxH, 2, 2, "FD");
+              doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "FD");
               doc.setTextColor(148, 163, 184);
               doc.setFontSize(8);
-              doc.text("[ 圖片載入失敗 ]", cx + 21.5, cy + 2 + (imgBoxH / 2), { align: "center" });
+              doc.text("[ 圖片載入失敗 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
             }
           } else {
             // Draw default placeholder
             doc.setFillColor(248, 250, 252);
             doc.setDrawColor(226, 232, 240);
             doc.setLineWidth(0.2);
-            doc.roundedRect(cx + 2, cy + 2, imgBoxW, imgBoxH, 2, 2, "FD");
+            doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "FD");
             doc.setTextColor(148, 163, 184);
             doc.setFontSize(8);
-            doc.text("[ 暫無圖片 ]", cx + 21.5, cy + 2 + (imgBoxH / 2), { align: "center" });
+            doc.text("[ 暫無圖片 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
           }
 
-          // 3. Price Hovering at Bottom Right of the Picture
+          // 3. Price Hovering at Bottom LEFT Corner of the Picture
           const priceVal = parseFloat(getProductPrice(p));
           const priceStr = priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價";
           
@@ -1055,8 +1066,8 @@ export default function App() {
           const pWidth = doc.getTextWidth(priceStr);
           const badgeW = pWidth + 3;
           const badgeH = 5;
-          const badgeX = cx + 2 + imgBoxW - badgeW - 1;
-          const badgeY = cy + 2 + imgBoxH - badgeH - 1;
+          const badgeX = imgX_base + 1; // Bottom LEFT position
+          const badgeY = imgY_base + imgBoxH - badgeH - 1;
 
           doc.setFillColor(255, 255, 255);
           doc.setDrawColor(226, 232, 240);
@@ -1069,24 +1080,26 @@ export default function App() {
             doc.setTextColor(15, 23, 42); // slate-900
           }
           doc.setFontSize(7.5);
-          doc.text(priceStr, badgeX + 1.5, badgeY + 3.8);
+          doc.text(priceStr, badgeX + 1.5, badgeY + 3.7);
 
-          // 4. Product Name at the Bottom of the card (cy + 48 to cy + 57)
-          doc.setFontSize(8.2);
+          // 4. Product Name at the Bottom of the card
+          doc.setFontSize(8);
           if (isOutOfStock) {
             doc.setTextColor(156, 163, 175); // grey-400
           } else {
             doc.setTextColor(15, 23, 42); // slate-900
           }
-          const wrappedName = doc.splitTextToSize(p.name, 39);
+          const textX = cx + 1.5;
+          const nameStartY = imgY_base + imgBoxH + 3.2;
+          const wrappedName = doc.splitTextToSize(p.name, cardW - 3);
           const line1 = wrappedName[0] || "";
           let line2 = wrappedName[1] || "";
           if (wrappedName.length > 2) {
             line2 = line2.substring(0, Math.max(0, line2.length - 2)) + "...";
           }
-          doc.text(line1, cx + 2, cy + 50);
+          doc.text(line1, textX, nameStartY);
           if (line2) {
-            doc.text(line2, cx + 2, cy + 54);
+            doc.text(line2, textX, nameStartY + 3.8);
           }
         });
       }
@@ -5154,56 +5167,40 @@ function revertStockForOrders(orderIdsMap) {
                       <span className="text-xs text-slate-400 font-bold">分類編號: {idx + 1}</span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-4 gap-3">
                       {productsByCategory[catName].map(p => {
                         const hasCategoryLabel = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].trim() !== "";
+                        const priceVal = parseFloat(getProductPrice(p));
                         return (
                           <div
                             key={p.id}
-                            className={`border rounded-xl p-3 flex gap-3 items-start transition-all ${
+                            className={`border rounded-xl p-2 flex flex-col justify-between transition-all overflow-hidden ${
                               !p.hasStock
                                 ? "border-slate-200 bg-slate-50 opacity-50 grayscale"
                                 : hasCategoryLabel
-                                ? "border-amber-400 bg-amber-50/30 shadow-xs"
-                                : "border-slate-150 bg-slate-50/50"
+                                ? "border-amber-400 bg-white shadow-2xs"
+                                : "border-slate-200 bg-white shadow-2xs"
                             }`}
                             style={!p.hasStock ? undefined : hasCategoryLabel ? { borderColor: "#d4af37", borderWidth: "1.5px" } : undefined}
                           >
-                          {/* Photo */}
-                          <div className="w-16 h-16 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 relative">
-                            <ProductImage
-                              id={p.id}
-                              name={p.name}
-                              fallbackUrl={p.extraAttributes?.["Image URLs"]}
-                              isOutOfStock={!p.hasStock}
-                              version={imageVersion}
-                            />
-                          </div>
-                          {/* Info */}
-                          <div className="space-y-1 min-w-0 flex-grow">
-                            <span className="text-[9px] font-mono font-bold text-slate-400 block uppercase">
-                              SKU: {p.id}
-                            </span>
-                            <h4 className="font-bold text-xs text-slate-800 line-clamp-1">{p.name}</h4>
-                            <div className="text-xs font-black text-slate-900">
-                              {parseFloat(getProductPrice(p)) > 0 ? (
-                                `HK$${parseFloat(getProductPrice(p)).toFixed(2)}`
-                              ) : (
-                                <span className="text-[10px] text-rose-500 font-extrabold bg-rose-50 px-1 py-0.2 rounded">價格由詢價決定</span>
-                              )}
+                            {/* Photo Container with Price hovering at bottom-left */}
+                            <div className="w-full aspect-[4/5] rounded-lg bg-slate-50 border border-slate-150 overflow-hidden shrink-0 relative">
+                              <ProductImage
+                                id={p.id}
+                                name={p.name}
+                                fallbackUrl={p.extraAttributes?.["Image URLs"]}
+                                isOutOfStock={!p.hasStock}
+                                version={imageVersion}
+                              />
+                              <div className="absolute bottom-1.5 left-1.5 z-10 bg-white/95 backdrop-blur-xs text-slate-900 border border-slate-200/80 px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-black shadow-2xs">
+                                {priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價"}
+                              </div>
                             </div>
-                            {hasCategoryLabel && (
-                              <span className="inline-block text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 mt-0.5">
-                                {p.extraAttributes["Categories"].trim()}
-                              </span>
-                            )}
-                            {p.extraAttributes?.["Merchant Remark"] && (
-                              <p className="text-[9px] text-slate-400 line-clamp-1 italic">
-                                備註: {p.extraAttributes?.["Merchant Remark"]}
-                              </p>
-                            )}
+                            {/* Info */}
+                            <div className="pt-1.5 px-0.5 min-w-0">
+                              <h4 className="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">{p.name}</h4>
+                            </div>
                           </div>
-                        </div>
                         );
                       })}
                     </div>
@@ -5217,7 +5214,7 @@ function revertStockForOrders(orderIdsMap) {
       )}
 
       {/* Hidden real-print output layout wrapper targeting browser printer */}
-      <div id="print-catalog-container" className="hidden print:block bg-white p-10 font-sans text-slate-900">
+      <div id="print-catalog-container" className="hidden print:block bg-white p-6 font-sans text-slate-900">
         {/* Cover Page */}
         <div className="flex flex-col justify-between h-[270mm] pb-10">
           <div className="text-center pt-32 space-y-4">
@@ -5262,23 +5259,24 @@ function revertStockForOrders(orderIdsMap) {
               <span className="text-xs text-slate-400 font-bold font-mono">共計 {productsByCategory[catName].length} 款商品</span>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-4 gap-3">
               {productsByCategory[catName].map(p => {
                 const hasCategoryLabel = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].trim() !== "";
+                const priceVal = parseFloat(getProductPrice(p));
                 return (
                   <div
                     key={p.id}
-                    className={`border rounded-xl p-4 flex gap-4 items-start transition-all ${
+                    className={`border rounded-xl p-2 flex flex-col justify-between transition-all overflow-hidden ${
                       !p.hasStock
                         ? "border-slate-200 bg-slate-50 opacity-50 grayscale"
                         : hasCategoryLabel
-                        ? "border-amber-400 bg-amber-50/30 shadow-xs"
-                        : "border-slate-200 bg-slate-50/50"
+                        ? "border-amber-400 bg-white shadow-2xs"
+                        : "border-slate-200 bg-white shadow-2xs"
                     }`}
                     style={!p.hasStock ? undefined : hasCategoryLabel ? { borderColor: "#d4af37", borderWidth: "1.5px" } : undefined}
                   >
-                    {/* Photo */}
-                    <div className="w-20 h-20 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 relative">
+                    {/* Photo Container with Price hovering at bottom-left */}
+                    <div className="w-full aspect-[4/5] rounded-lg bg-slate-50 border border-slate-150 overflow-hidden shrink-0 relative">
                       <ProductImage
                         id={p.id}
                         name={p.name}
@@ -5286,27 +5284,13 @@ function revertStockForOrders(orderIdsMap) {
                         isOutOfStock={!p.hasStock}
                         version={imageVersion}
                       />
+                      <div className="absolute bottom-1.5 left-1.5 z-10 bg-white/95 backdrop-blur-xs text-slate-900 border border-slate-200/80 px-1.5 py-0.5 rounded text-[11px] font-black shadow-2xs">
+                        {priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價"}
+                      </div>
                     </div>
                     {/* Info */}
-                    <div className="space-y-1.5 min-w-0 flex-grow">
-                      <h4 className="font-bold text-sm text-slate-800 leading-snug">{p.name}</h4>
-                      <div className="text-sm font-black text-slate-900">
-                        {parseFloat(getProductPrice(p)) > 0 ? (
-                          `HK$${parseFloat(getProductPrice(p)).toFixed(2)}`
-                        ) : (
-                          <span className="text-[10px] text-rose-500 font-extrabold bg-rose-50 px-2 py-0.5 rounded">價格由詢價決定</span>
-                        )}
-                      </div>
-                      {hasCategoryLabel && (
-                        <span className="inline-block text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 mt-1">
-                          {p.extraAttributes["Categories"].trim()}
-                        </span>
-                      )}
-                      {p.extraAttributes?.["Merchant Remark"] && (
-                        <p className="text-[10px] text-slate-500 italic pt-1 border-t border-slate-100">
-                          備註: {p.extraAttributes?.["Merchant Remark"]}
-                        </p>
-                      )}
+                    <div className="pt-1.5 px-0.5 min-w-0">
+                      <h4 className="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">{p.name}</h4>
                     </div>
                   </div>
                 );
