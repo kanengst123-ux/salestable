@@ -227,6 +227,9 @@ async function fetchProductsFromSheet() {
 let costCategoriesCache: {
   symbolToName: Record<string, string>;
   productIdToSymbol: Record<string, string>;
+  productIdToCostName: Record<string, string>;
+  categoryOrder: { symbol: string; name: string }[];
+  highlightCategories: string[];
 } | null = null;
 let lastCostFetchTime = 0;
 
@@ -247,6 +250,10 @@ async function fetchCostCategories() {
 
     const symbolToName: Record<string, string> = {};
     const productIdToSymbol: Record<string, string> = {};
+    const productIdToCostName: Record<string, string> = {};
+    const categoryOrder: { symbol: string; name: string }[] = [];
+    const highlightCategories: string[] = [];
+    const seenSymbols = new Set<string>();
 
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
@@ -254,20 +261,40 @@ async function fetchCostCategories() {
 
       const prodId = (row[0] || "").replace(/\r/g, "").trim();
       const catSymbol = (row[1] || "").replace(/\r/g, "").trim();
+      const costName = (row[2] || "").replace(/\r/g, "").trim();
 
       if (prodId && catSymbol) {
         productIdToSymbol[prodId] = catSymbol;
+      }
+      if (prodId && costName) {
+        productIdToCostName[prodId] = costName;
       }
 
       const mapSymbol = (row[4] || "").replace(/\r/g, "").trim();
       const mapName = (row[5] || "").replace(/\r/g, "").trim();
 
       if (mapSymbol && mapName) {
-        symbolToName[mapSymbol] = mapName;
+        if (mapSymbol.toUpperCase() === "CATEGORIES") {
+          if (!highlightCategories.includes(mapName)) {
+            highlightCategories.push(mapName);
+          }
+        } else {
+          symbolToName[mapSymbol] = mapName;
+          if (!seenSymbols.has(mapSymbol)) {
+            seenSymbols.add(mapSymbol);
+            categoryOrder.push({ symbol: mapSymbol, name: mapName });
+          }
+        }
       }
     }
 
-    costCategoriesCache = { symbolToName, productIdToSymbol };
+    costCategoriesCache = {
+      symbolToName,
+      productIdToSymbol,
+      productIdToCostName,
+      categoryOrder,
+      highlightCategories
+    };
     lastCostFetchTime = now;
 
     try {
@@ -291,7 +318,7 @@ async function fetchCostCategories() {
     } catch (backupError) {
       console.error("No valid cost categories backup found:", backupError);
     }
-    return { symbolToName: {}, productIdToSymbol: {} };
+    return { symbolToName: {}, productIdToSymbol: {}, productIdToCostName: {}, categoryOrder: [], highlightCategories: [] };
   }
 }
 
@@ -801,7 +828,13 @@ app.get("/api/products", async (req, res) => {
     const sheetProducts = await fetchProductsFromSheet();
     const localProducts = getLocalProducts();
     
-    let costCategories = { symbolToName: {} as Record<string, string>, productIdToSymbol: {} as Record<string, string> };
+    let costCategories: Awaited<ReturnType<typeof fetchCostCategories>> = {
+      symbolToName: {},
+      productIdToSymbol: {},
+      productIdToCostName: {},
+      categoryOrder: [],
+      highlightCategories: []
+    };
     try {
       costCategories = await fetchCostCategories();
     } catch (e) {
@@ -820,21 +853,23 @@ app.get("/api/products", async (req, res) => {
     const filteredSheet = sheetProducts.filter(p => !localIds.has(p.id));
     const allRawProducts = [...localProducts, ...filteredSheet];
 
-    // Decorate products with cost tab category symbol and name
+    // Decorate products with cost tab category symbol, name, and costName
     const decoratedProducts = allRawProducts.map((p: any) => {
       const symbol = (costCategories.productIdToSymbol || {})[p.id] || "";
       const name = (costCategories.symbolToName || {})[symbol] || "";
+      const costName = (costCategories.productIdToCostName || {})[p.id] || p.name;
       return {
         ...p,
         costCategorySymbol: symbol,
-        costCategoryName: name
+        costCategoryName: name,
+        costName: costName
       };
     });
     
     res.json({ products: decoratedProducts, costCategories, promoCategories });
   } catch (error) {
     console.error("Get products error:", error);
-    res.json({ products: getLocalProducts(), costCategories: { symbolToName: {}, productIdToSymbol: {} }, promoCategories: [] });
+    res.json({ products: getLocalProducts(), costCategories: { symbolToName: {}, productIdToSymbol: {}, productIdToCostName: {}, categoryOrder: [], highlightCategories: [] }, promoCategories: [] });
   }
 });
 

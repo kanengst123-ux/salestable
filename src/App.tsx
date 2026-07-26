@@ -42,6 +42,7 @@ import {
 interface Product {
   id: string;
   name: string;
+  costName?: string;
   price: string;
   priceA?: string;
   priceB?: string;
@@ -399,7 +400,16 @@ export default function App() {
   const [costCategories, setCostCategories] = useState<{
     symbolToName: Record<string, string>;
     productIdToSymbol: Record<string, string>;
-  }>({ symbolToName: {}, productIdToSymbol: {} });
+    productIdToCostName?: Record<string, string>;
+    categoryOrder?: { symbol: string; name: string }[];
+    highlightCategories?: string[];
+  }>({
+    symbolToName: {},
+    productIdToSymbol: {},
+    productIdToCostName: {},
+    categoryOrder: [],
+    highlightCategories: []
+  });
   const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState<boolean>(false);
   const [isStockDropdownOpen, setIsStockDropdownOpen] = useState<boolean>(false);
   const [stockFilter, setStockFilter] = useState<string>("all"); // 'all' | 'in-stock' | 'out-of-stock' | 'always-stock'
@@ -438,19 +448,90 @@ export default function App() {
   const [isPreviewingPdfPrint, setIsPreviewingPdfPrint] = useState<boolean>(false);
   const [publicImageFiles, setPublicImageFiles] = useState<Set<string>>(new Set());
 
-  // Group products by top category for Catalog and PDF generation
-  const productsByCategory = useMemo(() => {
+  // Helper function to build ordered catalog products with top duplicated highlight categories & sequence
+  const buildOrderedCatalogProducts = (
+    prods: Product[],
+    cCat: typeof costCategories
+  ) => {
     const groups: Record<string, Product[]> = {};
-    const costProducts = products.filter(p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "" && p.costCategorySymbol.trim().toUpperCase() !== "X");
+
+    const costProducts = prods.filter(
+      p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "" && p.costCategorySymbol.trim().toUpperCase() !== "X"
+    );
+
+    const highlightCats = (cCat.highlightCategories && cCat.highlightCategories.length > 0)
+      ? cCat.highlightCategories
+      : ["新貨", "清貨", "季度熱賣"];
+
+    const catOrder = (cCat.categoryOrder && cCat.categoryOrder.length > 0)
+      ? cCat.categoryOrder.map(c => c.name)
+      : [];
+
+    // 1. Top Section: Highlight Categories (Duplicated products matching Col M 'Categories')
+    highlightCats.forEach(hCat => {
+      const matching = costProducts.filter(p => {
+        const catField = p.extraAttributes?.["Categories"] || "";
+        if (!catField) return false;
+        return catField.includes(hCat);
+      });
+
+      if (matching.length > 0) {
+        const sortedMatching = [...matching].sort((a, b) => {
+          const nameA = a.costName || a.name || "";
+          const nameB = b.costName || b.name || "";
+          return nameA.localeCompare(nameB, "zh-HK");
+        });
+
+        groups[hCat] = sortedMatching.map(p => ({
+          ...p,
+          costCategoryName: hCat
+        }));
+      }
+    });
+
+    // 2. Main Section: Remaining categories ordered by sequence in Col E of Cost tab
+    const mainGroups: Record<string, Product[]> = {};
     costProducts.forEach(p => {
       const cat = p.costCategoryName?.trim() || p.extraAttributes?.["Categories"]?.split("/")[0]?.trim() || "其他分類";
-      if (!groups[cat]) {
-        groups[cat] = [];
+      if (!mainGroups[cat]) {
+        mainGroups[cat] = [];
       }
-      groups[cat].push(p);
+      mainGroups[cat].push(p);
     });
+
+    Object.keys(mainGroups).forEach(cat => {
+      mainGroups[cat].sort((a, b) => {
+        const nameA = a.costName || a.name || "";
+        const nameB = b.costName || b.name || "";
+        return nameA.localeCompare(nameB, "zh-HK");
+      });
+    });
+
+    const orderedCatNames: string[] = [];
+
+    catOrder.forEach(catName => {
+      if (mainGroups[catName] && !orderedCatNames.includes(catName)) {
+        orderedCatNames.push(catName);
+      }
+    });
+
+    Object.keys(mainGroups).forEach(catName => {
+      if (!orderedCatNames.includes(catName)) {
+        orderedCatNames.push(catName);
+      }
+    });
+
+    orderedCatNames.forEach(catName => {
+      groups[catName] = mainGroups[catName];
+    });
+
     return groups;
-  }, [products]);
+  };
+
+  // Group products by top category for Catalog and PDF generation
+  const productsByCategory = useMemo(() => {
+    return buildOrderedCatalogProducts(products, costCategories);
+  }, [products, costCategories]);
 
   const catalogProductsCount = useMemo(() => {
     return (Object.values(productsByCategory) as Product[][]).reduce((acc, curr) => acc + curr.length, 0);
@@ -852,20 +933,17 @@ export default function App() {
       doc.setTextColor(226, 232, 240); // slate-200
       doc.text(`Price Tier: ${selectedPriceTier} 系列`, 105, 120, { align: "center" });
 
-      const costTabProducts = products.filter(p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "" && p.costCategorySymbol.trim().toUpperCase() !== "X");
+      const groupedCatalog = buildOrderedCatalogProducts(products, costCategories);
+      const sortedProducts: Product[] = [];
+      Object.values(groupedCatalog).forEach(prods => {
+        sortedProducts.push(...prods);
+      });
 
       doc.setFontSize(10);
       doc.setTextColor(148, 163, 184); // slate-400
       const nowStr = new Date().toLocaleDateString("zh-TW", { year: "numeric", month: "long", day: "numeric" });
-      doc.text(`產出日期: ${nowStr} | 共 ${costTabProducts.length} 款商品`, 105, 240, { align: "center" });
+      doc.text(`產出日期: ${nowStr} | 共 ${sortedProducts.length} 款商品`, 105, 240, { align: "center" });
       doc.text("支援完全離線查閱，隨時隨地，快速詢價", 105, 250, { align: "center" });
-
-      // Sort products by category so that consecutive cards are grouped beautifully
-      const sortedProducts = [...costTabProducts].sort((a, b) => {
-        const catA = a.costCategoryName || "其他分類";
-        const catB = b.costCategoryName || "其他分類";
-        return catA.localeCompare(catB, "zh-HK");
-      });
 
       // Parallel batch image resolver loop with real-time UI updates
       const processedProducts: { product: Product, imgData: string | null, format: string | null, width?: number, height?: number }[] = [];
@@ -1091,7 +1169,7 @@ export default function App() {
           }
           const textX = cx + 1.5;
           const nameStartY = imgY_base + imgBoxH + 3.2;
-          const wrappedName = doc.splitTextToSize(p.name, cardW - 3);
+          const wrappedName = doc.splitTextToSize(p.costName || p.name, cardW - 3);
           const line1 = wrappedName[0] || "";
           let line2 = wrappedName[1] || "";
           if (wrappedName.length > 2) {
@@ -5173,7 +5251,7 @@ function revertStockForOrders(orderIdsMap) {
                         const priceVal = parseFloat(getProductPrice(p));
                         return (
                           <div
-                            key={p.id}
+                            key={`${catName}-${p.id}`}
                             className={`border rounded-xl p-2 flex flex-col justify-between transition-all overflow-hidden ${
                               !p.hasStock
                                 ? "border-slate-200 bg-slate-50 opacity-50 grayscale"
@@ -5198,7 +5276,7 @@ function revertStockForOrders(orderIdsMap) {
                             </div>
                             {/* Info */}
                             <div className="pt-1.5 px-0.5 min-w-0">
-                              <h4 className="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">{p.name}</h4>
+                              <h4 className="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">{p.costName || p.name}</h4>
                             </div>
                           </div>
                         );
@@ -5265,7 +5343,7 @@ function revertStockForOrders(orderIdsMap) {
                 const priceVal = parseFloat(getProductPrice(p));
                 return (
                   <div
-                    key={p.id}
+                    key={`${catName}-${p.id}`}
                     className={`border rounded-xl p-2 flex flex-col justify-between transition-all overflow-hidden ${
                       !p.hasStock
                         ? "border-slate-200 bg-slate-50 opacity-50 grayscale"
@@ -5290,7 +5368,7 @@ function revertStockForOrders(orderIdsMap) {
                     </div>
                     {/* Info */}
                     <div className="pt-1.5 px-0.5 min-w-0">
-                      <h4 className="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">{p.name}</h4>
+                      <h4 className="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">{p.costName || p.name}</h4>
                     </div>
                   </div>
                 );
