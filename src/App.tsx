@@ -652,6 +652,146 @@ export default function App() {
     }
   };
 
+  // Helper to generate crisp canvas category section header for jsPDF
+  const createCategoryTitleDataUrl = (text: string): { dataUrl: string, widthMm: number, heightMm: number } => {
+    try {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return { dataUrl: "", widthMm: 0, heightMm: 0 };
+
+      const fontSize = 38;
+      ctx.font = `900 ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", -apple-system, sans-serif`;
+      const textMetrics = ctx.measureText(text);
+      const width = Math.ceil(textMetrics.width + 12);
+      const height = Math.ceil(fontSize + 12);
+
+      canvas.width = width;
+      canvas.height = height;
+
+      ctx.fillStyle = "#0f172a"; // slate-900
+      ctx.font = `900 ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", -apple-system, sans-serif`;
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, 0, height / 2 + 1);
+
+      const heightMm = 7.5;
+      const widthMm = (width / height) * heightMm;
+      return { dataUrl: canvas.toDataURL("image/png"), widthMm, heightMm };
+    } catch (e) {
+      return { dataUrl: "", widthMm: 0, heightMm: 0 };
+    }
+  };
+
+  // Helper to generate crisp canvas category badge for jsPDF
+  const createCategoryBadgeDataUrl = (text: string, isHighlight: boolean): { dataUrl: string, widthMm: number, heightMm: number } => {
+    try {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return { dataUrl: "", widthMm: 0, heightMm: 0 };
+
+      const fontSize = 28;
+      ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", -apple-system, sans-serif`;
+      const textMetrics = ctx.measureText(text);
+      const paddingX = 14;
+      const paddingY = 8;
+      const width = Math.max(80, Math.ceil(textMetrics.width + paddingX * 2));
+      const height = Math.ceil(fontSize + paddingY * 2);
+
+      canvas.width = width;
+      canvas.height = height;
+
+      // Fill background
+      ctx.fillStyle = isHighlight ? "#d97706" : "#1e293b"; // Amber-600 vs Slate-800
+      ctx.beginPath();
+      if (typeof (ctx as any).roundRect === "function") {
+        (ctx as any).roundRect(0, 0, width, height, 8);
+      } else {
+        ctx.rect(0, 0, width, height);
+      }
+      ctx.fill();
+
+      // Border stroke
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+
+      // Text fill
+      ctx.fillStyle = "#ffffff";
+      ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", -apple-system, sans-serif`;
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, paddingX, height / 2 + 1);
+
+      const heightMm = 4.8;
+      const widthMm = (width / height) * heightMm;
+      return { dataUrl: canvas.toDataURL("image/png"), widthMm, heightMm };
+    } catch (e) {
+      return { dataUrl: "", widthMm: 0, heightMm: 0 };
+    }
+  };
+
+  // Helper to generate canvas text for product names in jsPDF when font is missing
+  const createCanvasTextDataUrl = (
+    text: string,
+    maxWidthMm: number,
+    textColor: string = "#0f172a"
+  ): { dataUrl: string, widthMm: number, heightMm: number } => {
+    try {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return { dataUrl: "", widthMm: 0, heightMm: 0 };
+
+      const fontSize = 26;
+      const lineHeight = 32;
+      ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", sans-serif`;
+
+      const chars = text.split("");
+      let line1 = "";
+      let line2 = "";
+      const targetPixelWidth = 320; // High resolution pixel width for 44.5mm box
+
+      for (let i = 0; i < chars.length; i++) {
+        const testLine = line1 + chars[i];
+        if (ctx.measureText(testLine).width > targetPixelWidth && i > 0) {
+          line2 = chars.slice(i).join("");
+          break;
+        } else {
+          line1 = testLine;
+        }
+      }
+
+      if (line2) {
+        let testLine2 = "";
+        for (let i = 0; i < line2.length; i++) {
+          if (ctx.measureText(testLine2 + line2[i]).width > targetPixelWidth - 25) {
+            testLine2 += "...";
+            break;
+          }
+          testLine2 += line2[i];
+        }
+        line2 = testLine2;
+      }
+
+      const numLines = line2 ? 2 : 1;
+      const canvasWidth = Math.ceil(targetPixelWidth);
+      const canvasHeight = Math.ceil(numLines * lineHeight + 4);
+
+      canvas.width = canvasWidth;
+      canvas.height = canvasHeight;
+
+      ctx.fillStyle = textColor;
+      ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", sans-serif`;
+      ctx.textBaseline = "top";
+      ctx.fillText(line1, 0, 2);
+      if (line2) {
+        ctx.fillText(line2, 0, lineHeight + 2);
+      }
+
+      const heightMm = numLines * 3.6;
+      return { dataUrl: canvas.toDataURL("image/png"), widthMm: maxWidthMm, heightMm };
+    } catch (e) {
+      return { dataUrl: "", widthMm: 0, heightMm: 0 };
+    }
+  };
+
   // Programmatic PDF Exporter (jsPDF) with Outline Bookmarks of categories
   const handleGenerateJsPdf = async () => {
     try {
@@ -977,235 +1117,288 @@ export default function App() {
         processedProducts.push(...results);
       }
 
-      // Group bookmarks by category and their page numbers
-      const productsPerPage = 16;
-      const totalPages = Math.ceil(processedProducts.length / productsPerPage);
-      const categoryPageMap: Record<string, number> = {};
-      
-      processedProducts.forEach((item, index) => {
-        const catName = item.product.costCategoryName || "其他分類";
-        const pageIdx = Math.floor(index / productsPerPage);
-        const actualPageNum = pageIdx + 2; // cover is page 1, product grid starts at page 2
-        if (categoryPageMap[catName] === undefined) {
-          categoryPageMap[catName] = actualPageNum;
-        }
+      // Group processed products by category keeping ordered sequence
+      const categoriesOrder = Object.keys(groupedCatalog);
+      const categoryMap: Record<string, typeof processedProducts> = {};
+      categoriesOrder.forEach(cat => {
+        categoryMap[cat] = [];
       });
 
-      // Create outline bookmarks root
-      const outline = doc.outline;
-      if (outline) {
-        // Add Cover Page bookmark
-        outline.add(null, fontAdded ? "封面 / Cover Page" : "Cover Page", { pageNumber: 1 });
-        
-        // Add a bookmark for each category directly at the top level for ultra-fast navigation
-        Object.entries(categoryPageMap).forEach(([catName, pageNumVal]) => {
-          outline.add(null, catName, { pageNumber: pageNumVal });
-        });
-      }
+      processedProducts.forEach(item => {
+        const catName = item.product.costCategoryName || "其他分類";
+        if (!categoryMap[catName]) {
+          categoryMap[catName] = [];
+        }
+        categoryMap[catName].push(item);
+      });
 
-      // 2. Render Product Catalog Grid (4 x 4 per page)
+      const activeCategories = Object.keys(categoryMap).filter(cat => categoryMap[cat].length > 0);
+      const categoryPageMap: Record<string, number> = {};
+
       let pageNum = 1;
+      let currentY = 297; // Initialized past page bottom to force new page for first category
 
-      for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
-        doc.addPage();
-        pageNum++;
+      const cardW = 47.5;
+      const cardH = 65.5;
+      const gapX = 3;
+      const gapY = 3.5;
+      const startX = 6;
+      const maxY = 280;
 
+      const drawPageTopHeader = () => {
         if (fontAdded) {
           doc.setFont("NotoSansTC", "normal");
         } else {
           doc.setFont("helvetica", "normal");
         }
-
-        // Draw page header
         doc.setFontSize(9);
         doc.setTextColor(15, 23, 42); // slate-900
         doc.text("商品目錄 / Product Catalog", 6, 9);
-        
+
         doc.setFontSize(7.5);
         doc.setTextColor(100, 116, 139); // slate-500
         doc.text(`Price Tier: ${selectedPriceTier} 系列 | 產出日期: ${nowStr}`, 105, 9, { align: "center" });
-        doc.text(`頁碼: ${pageNum} / ${totalPages + 1}`, 204, 9, { align: "right" });
+        doc.text(`頁碼: ${pageNum}`, 204, 9, { align: "right" });
 
         // Divider line
         doc.setDrawColor(226, 232, 240);
         doc.setLineWidth(0.3);
         doc.line(6, 11, 204, 11);
+      };
 
-        const startIndex = pageIdx * productsPerPage;
-        const pageProducts = processedProducts.slice(startIndex, startIndex + productsPerPage);
+      activeCategories.forEach((catName) => {
+        const catItems = categoryMap[catName];
+        if (!catItems || catItems.length === 0) return;
 
-        const startX = 6;
-        const startY = 13;
-        const cardW = 47.5;
-        const cardH = 65.5;
-        const gapX = 3;
-        const gapY = 3.5;
+        // Check if we need a new page for Category Header + 1 row of cards (8mm + 65.5mm = 73.5mm)
+        if (currentY + 73.5 > maxY) {
+          doc.addPage();
+          pageNum++;
+          drawPageTopHeader();
+          currentY = 14;
+        } else if (currentY > 14) {
+          currentY += 2; // small separator space before new category on same page
+        }
 
-        pageProducts.forEach((item, index) => {
-          const row = Math.floor(index / 4);
-          const col = index % 4;
-          const cx = startX + col * (cardW + gapX);
-          const cy = startY + row * (cardH + gapY);
+        // Record page number for bookmarks
+        if (!categoryPageMap[catName]) {
+          categoryPageMap[catName] = pageNum;
+        }
 
-          const p = item.product;
-          const isOutOfStock = !p.hasStock;
+        // Render Category Section Header Banner (e.g. "季節用品")
+        const titleImg = createCategoryTitleDataUrl(catName);
+        if (titleImg.dataUrl) {
+          doc.addImage(titleImg.dataUrl, "PNG", startX, currentY, titleImg.widthMm, titleImg.heightMm);
+        } else if (fontAdded) {
+          doc.setFontSize(14);
+          doc.setFont("NotoSansTC", "bold");
+          doc.setTextColor(15, 23, 42);
+          doc.text(catName, startX, currentY + 6);
+        }
 
-          // 1. Card Frame
-          const hasCategoryLabel = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].trim() !== "";
-          if (isOutOfStock) {
-            doc.setDrawColor(203, 213, 225); // muted slate-300 border
-            doc.setLineWidth(0.35);
-            doc.setFillColor(248, 250, 252); // light slate-50 card body
-          } else if (hasCategoryLabel) {
-            doc.setDrawColor(212, 175, 55); // Gold border color
-            doc.setLineWidth(0.75); // thicker gold border
-            doc.setFillColor(255, 255, 255); // white card body
-          } else {
-            doc.setDrawColor(28, 49, 115); // brand navy border
-            doc.setLineWidth(0.35);
-            doc.setFillColor(255, 255, 255); // white card body
+        // Underline accent under category section title
+        doc.setDrawColor(15, 23, 42);
+        doc.setLineWidth(0.5);
+        doc.line(startX, currentY + 8, 204, currentY + 8);
+        currentY += 9.5;
+
+        // Render items in rows of 4
+        for (let i = 0; i < catItems.length; i += 4) {
+          const rowItems = catItems.slice(i, i + 4);
+
+          // Check if this row fits on current page
+          if (currentY + cardH > maxY) {
+            doc.addPage();
+            pageNum++;
+            drawPageTopHeader();
+            currentY = 14;
+
+            // Continuation category header
+            const contImg = createCategoryTitleDataUrl(`${catName} (續)`);
+            if (contImg.dataUrl) {
+              doc.addImage(contImg.dataUrl, "PNG", startX, currentY, contImg.widthMm, contImg.heightMm);
+            }
+            doc.setDrawColor(226, 232, 240);
+            doc.setLineWidth(0.3);
+            doc.line(startX, currentY + 8, 204, currentY + 8);
+            currentY += 9.5;
           }
-          doc.roundedRect(cx, cy, cardW, cardH, 2, 2, "FD");
 
-          // 2. Image inside Card (Maximized Picture Box)
-          const pad = 1.5;
-          const imgBoxW = cardW - (pad * 2); // 44.5 mm
-          const imgBoxH = 51.5; // 51.5 mm
-          const imgX_base = cx + pad;
-          const imgY_base = cy + pad;
+          // Render cards in the row
+          rowItems.forEach((item, col) => {
+            const cx = startX + col * (cardW + gapX);
+            const cy = currentY;
 
-          if (item.imgData) {
-            try {
-              let imgW = imgBoxW;
-              let imgH = imgBoxH;
-              let imgX = imgX_base;
-              let imgY = imgY_base;
+            const p = item.product;
+            const isOutOfStock = !p.hasStock;
 
-              const originalW = item.width;
-              const originalH = item.height;
+            // 1. Card Frame
+            const hasCategoryLabel = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].trim() !== "";
+            if (isOutOfStock) {
+              doc.setDrawColor(203, 213, 225); // muted slate-300 border
+              doc.setLineWidth(0.35);
+              doc.setFillColor(248, 250, 252); // light slate-50 card body
+            } else if (hasCategoryLabel) {
+              doc.setDrawColor(212, 175, 55); // Gold border color
+              doc.setLineWidth(0.75); // thicker gold border
+              doc.setFillColor(255, 255, 255); // white card body
+            } else {
+              doc.setDrawColor(28, 49, 115); // brand navy border
+              doc.setLineWidth(0.35);
+              doc.setFillColor(255, 255, 255); // white card body
+            }
+            doc.roundedRect(cx, cy, cardW, cardH, 2, 2, "FD");
 
-              if (originalW && originalH) {
-                const targetRatio = imgBoxW / imgBoxH;
-                const imageRatio = originalW / originalH;
+            // 2. Image inside Card
+            const pad = 1.5;
+            const imgBoxW = cardW - (pad * 2); // 44.5 mm
+            const imgBoxH = 51.5; // 51.5 mm
+            const imgX_base = cx + pad;
+            const imgY_base = cy + pad;
 
-                if (imageRatio > targetRatio) {
-                  imgW = imgBoxW;
-                  imgH = imgBoxW / imageRatio;
-                } else {
-                  imgH = imgBoxH;
-                  imgW = imgBoxH * imageRatio;
+            if (item.imgData) {
+              try {
+                let imgW = imgBoxW;
+                let imgH = imgBoxH;
+                let imgX = imgX_base;
+                let imgY = imgY_base;
+
+                const originalW = item.width;
+                const originalH = item.height;
+
+                if (originalW && originalH) {
+                  const targetRatio = imgBoxW / imgBoxH;
+                  const imageRatio = originalW / originalH;
+
+                  if (imageRatio > targetRatio) {
+                    imgW = imgBoxW;
+                    imgH = imgBoxW / imageRatio;
+                  } else {
+                    imgH = imgBoxH;
+                    imgW = imgBoxH * imageRatio;
+                  }
+                  imgX = imgX_base + (imgBoxW - imgW) / 2;
+                  imgY = imgY_base + (imgBoxH - imgH) / 2;
                 }
-                imgX = imgX_base + (imgBoxW - imgW) / 2;
-                imgY = imgY_base + (imgBoxH - imgH) / 2;
-              }
 
-              doc.addImage(item.imgData, item.format || "JPEG", imgX, imgY, imgW, imgH);
-              
-              // Draw semi-transparent overlay for out-of-stock items
-              if (isOutOfStock) {
-                try {
-                  const gState = new (doc as any).GState({ opacity: 0.55 });
-                  doc.setGState(gState);
-                  doc.setFillColor(220, 225, 230); // light slate overlay
-                  doc.rect(imgX_base, imgY_base, imgBoxW, imgBoxH, "F");
-                  doc.setGState(new (doc as any).GState({ opacity: 1.0 })); // reset
-                } catch (gStateErr) {
-                  doc.setFillColor(241, 245, 249);
+                doc.addImage(item.imgData, item.format || "JPEG", imgX, imgY, imgW, imgH);
+
+                // Draw semi-transparent overlay for out-of-stock items
+                if (isOutOfStock) {
+                  try {
+                    const gState = new (doc as any).GState({ opacity: 0.55 });
+                    doc.setGState(gState);
+                    doc.setFillColor(220, 225, 230);
+                    doc.rect(imgX_base, imgY_base, imgBoxW, imgBoxH, "F");
+                    doc.setGState(new (doc as any).GState({ opacity: 1.0 }));
+                  } catch (gStateErr) {
+                    doc.setFillColor(241, 245, 249);
+                  }
                 }
-              }
 
-              // Draw thin border over the image
-              doc.setDrawColor(226, 232, 240);
-              doc.setLineWidth(0.15);
-              doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "S");
-            } catch (imgErr) {
-              // Draw placeholder on failure
+                // Draw thin border over the image
+                doc.setDrawColor(226, 232, 240);
+                doc.setLineWidth(0.15);
+                doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "S");
+              } catch (imgErr) {
+                doc.setFillColor(248, 250, 252);
+                doc.setDrawColor(226, 232, 240);
+                doc.setLineWidth(0.2);
+                doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "FD");
+                doc.setTextColor(148, 163, 184);
+                doc.setFontSize(8);
+                doc.text("[ 圖片載入失敗 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
+              }
+            } else {
               doc.setFillColor(248, 250, 252);
               doc.setDrawColor(226, 232, 240);
               doc.setLineWidth(0.2);
               doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "FD");
               doc.setTextColor(148, 163, 184);
               doc.setFontSize(8);
-              doc.text("[ 圖片載入失敗 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
+              doc.text("[ 暫無圖片 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
             }
-          } else {
-            // Draw default placeholder
-            doc.setFillColor(248, 250, 252);
+
+            // 3. Category Tag hovering at Top LEFT Corner of Image
+            const catTagLabel = p.costCategoryName || p.extraAttributes?.["Categories"]?.split("/")[0]?.trim() || "";
+            if (catTagLabel) {
+              const isHighlight = ["新貨", "清貨", "季度熱賣"].includes(catTagLabel);
+              const badge = createCategoryBadgeDataUrl(catTagLabel, isHighlight);
+              if (badge.dataUrl) {
+                doc.addImage(badge.dataUrl, "PNG", imgX_base + 1, imgY_base + 1, badge.widthMm, badge.heightMm);
+              }
+            }
+
+            // 4. Price Tag hovering at Bottom LEFT Corner of Image
+            const priceVal = parseFloat(getProductPrice(p));
+            const priceStr = priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : "請詢價";
+
+            doc.setFontSize(7.5);
+            const pWidth = doc.getTextWidth(priceStr);
+            const badgeW = Math.max(16, pWidth + 3);
+            const badgeH = 5;
+            const badgeX = imgX_base + 1;
+            const badgeY = imgY_base + imgBoxH - badgeH - 1;
+
+            doc.setFillColor(255, 255, 255);
             doc.setDrawColor(226, 232, 240);
-            doc.setLineWidth(0.2);
-            doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "FD");
-            doc.setTextColor(148, 163, 184);
-            doc.setFontSize(8);
-            doc.text("[ 暫無圖片 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
-          }
-
-          // 3. Category Header Tag hovering at Top LEFT Corner of the Picture
-          const catTagLabel = p.costCategoryName || p.extraAttributes?.["Categories"]?.split("/")[0]?.trim() || "";
-          if (catTagLabel) {
-            doc.setFontSize(6.5);
-            doc.setTextColor(255, 255, 255);
-            const catWidth = doc.getTextWidth(catTagLabel);
-            const catBadgeW = catWidth + 3;
-            const catBadgeH = 4.2;
-            const catBadgeX = imgX_base + 1;
-            const catBadgeY = imgY_base + 1;
-
-            if (["新貨", "清貨", "季度熱賣"].includes(catTagLabel)) {
-              doc.setFillColor(180, 83, 9); // Amber-700
-            } else {
-              doc.setFillColor(30, 41, 59); // Slate-800
-            }
-            doc.setDrawColor(255, 255, 255);
             doc.setLineWidth(0.15);
-            doc.roundedRect(catBadgeX, catBadgeY, catBadgeW, catBadgeH, 0.6, 0.6, "FD");
+            doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 0.8, 0.8, "FD");
 
-            doc.setFontSize(6.5);
-            doc.text(catTagLabel, catBadgeX + 1.5, catBadgeY + 3.1);
-          }
+            if (isOutOfStock) {
+              doc.setTextColor(156, 163, 175);
+            } else {
+              doc.setTextColor(15, 23, 42);
+            }
+            doc.setFontSize(7.5);
+            doc.text(priceStr, badgeX + 1.5, badgeY + 3.7);
 
-          // 4. Price Hovering at Bottom LEFT Corner of the Picture
-          const priceVal = parseFloat(getProductPrice(p));
-          const priceStr = priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價";
-          
-          doc.setFontSize(7.5);
-          const pWidth = doc.getTextWidth(priceStr);
-          const badgeW = pWidth + 3;
-          const badgeH = 5;
-          const badgeX = imgX_base + 1; // Bottom LEFT position
-          const badgeY = imgY_base + imgBoxH - badgeH - 1;
+            // 5. Product Name at Bottom of Card
+            const textX = cx + 1.5;
+            const nameStartY = imgY_base + imgBoxH + 3.2;
+            const productNameStr = p.costName || p.name || "";
 
-          doc.setFillColor(255, 255, 255);
-          doc.setDrawColor(226, 232, 240);
-          doc.setLineWidth(0.15);
-          doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 0.8, 0.8, "FD");
+            if (fontAdded) {
+              doc.setFontSize(8);
+              if (isOutOfStock) {
+                doc.setTextColor(156, 163, 175);
+              } else {
+                doc.setTextColor(15, 23, 42);
+              }
+              const wrappedName = doc.splitTextToSize(productNameStr, cardW - 3);
+              const line1 = wrappedName[0] || "";
+              let line2 = wrappedName[1] || "";
+              if (wrappedName.length > 2) {
+                line2 = line2.substring(0, Math.max(0, line2.length - 2)) + "...";
+              }
+              doc.text(line1, textX, nameStartY);
+              if (line2) {
+                doc.text(line2, textX, nameStartY + 3.8);
+              }
+            } else {
+              const textImg = createCanvasTextDataUrl(
+                productNameStr,
+                cardW - 3,
+                isOutOfStock ? "#9ca3af" : "#0f172a"
+              );
+              if (textImg.dataUrl) {
+                doc.addImage(textImg.dataUrl, "PNG", textX, nameStartY - 1, textImg.widthMm, textImg.heightMm);
+              }
+            }
+          });
 
-          if (isOutOfStock) {
-            doc.setTextColor(156, 163, 175);
-          } else {
-            doc.setTextColor(15, 23, 42); // slate-900
-          }
-          doc.setFontSize(7.5);
-          doc.text(priceStr, badgeX + 1.5, badgeY + 3.7);
+          currentY += cardH + gapY;
+        }
 
-          // 5. Product Name at the Bottom of the card
-          doc.setFontSize(8);
-          if (isOutOfStock) {
-            doc.setTextColor(156, 163, 175); // grey-400
-          } else {
-            doc.setTextColor(15, 23, 42); // slate-900
-          }
-          const textX = cx + 1.5;
-          const nameStartY = imgY_base + imgBoxH + 3.2;
-          const wrappedName = doc.splitTextToSize(p.costName || p.name, cardW - 3);
-          const line1 = wrappedName[0] || "";
-          let line2 = wrappedName[1] || "";
-          if (wrappedName.length > 2) {
-            line2 = line2.substring(0, Math.max(0, line2.length - 2)) + "...";
-          }
-          doc.text(line1, textX, nameStartY);
-          if (line2) {
-            doc.text(line2, textX, nameStartY + 3.8);
-          }
+        currentY += 2; // small space after category
+      });
+
+      // Create outline bookmarks root
+      const outline = doc.outline;
+      if (outline) {
+        outline.add(null, fontAdded ? "封面 / Cover Page" : "Cover Page", { pageNumber: 1 });
+        Object.entries(categoryPageMap).forEach(([catName, pageNumVal]) => {
+          outline.add(null, catName, { pageNumber: pageNumVal });
         });
       }
 
@@ -5264,12 +5457,11 @@ function revertStockForOrders(orderIdsMap) {
                 {/* Categories & Products loops */}
                 {Object.keys(productsByCategory).map((catName, idx) => (
                   <div key={catName} className="mb-10 pb-10 border-b border-slate-100">
-                    <div className="flex items-center justify-between mb-4 pb-2 border-b-2 border-indigo-600">
-                      <h3 className="text-lg font-black text-indigo-900 flex items-center gap-2">
-                        <span className="w-1.5 h-6 bg-indigo-600 rounded-sm inline-block"></span>
+                    <div className="flex items-center justify-between mb-4 pb-2 border-b-2 border-slate-900">
+                      <h3 className="text-xl font-black text-slate-900 flex items-center gap-2 tracking-tight">
                         {catName}
                       </h3>
-                      <span className="text-xs text-slate-400 font-bold">分類編號: {idx + 1}</span>
+                      <span className="text-xs text-slate-400 font-bold">共 {productsByCategory[catName].length} 款商品</span>
                     </div>
 
                     <div className="grid grid-cols-4 gap-3">
@@ -5307,7 +5499,7 @@ function revertStockForOrders(orderIdsMap) {
                                 </div>
                               )}
                               <div className="absolute bottom-1.5 left-1.5 z-10 bg-white/95 backdrop-blur-xs text-slate-900 border border-slate-200/80 px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-black shadow-2xs">
-                                {priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價"}
+                                {priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : "請詢價"}
                               </div>
                             </div>
                             {/* Info */}
