@@ -14,17 +14,30 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 const bucketName = process.env.GCS_BUCKET_NAME || "my-product-catalog-images";
 let s3Client: S3Client | null = null;
 let gcsDisabledDueToBilling = false;
+let gcsBillingErrorTime = 0;
 
 function handleGcsError(error: any, context: string) {
-  const errMsg = error?.message || "";
-  if (errMsg.includes("delinquent") || errMsg.includes("billing") || errMsg.includes("Billing")) {
-    if (!gcsDisabledDueToBilling) {
-      gcsDisabledDueToBilling = true;
-      console.log(`[Storage] GCS sync paused. Local file system storage active.`);
-    }
+  const errMsg = (error?.message || "").toLowerCase();
+  if (errMsg.includes("delinquent") || errMsg.includes("billing") || error?.$metadata?.httpStatusCode === 403 || error?.Code === "AccessDenied") {
+    gcsDisabledDueToBilling = true;
+    gcsBillingErrorTime = Date.now();
+    console.log(`[Storage] Cloud sync paused (local file storage active for ${context}).`);
   } else {
-    console.log(`[Storage] GCS handled fallback for context: ${context}`);
+    console.log(`[Storage] Local fallback active for context: ${context}`);
   }
+}
+
+function isGcsAvailable(): boolean {
+  if (!s3Client) return false;
+  if (gcsDisabledDueToBilling) {
+    // Retry GCS every 30 seconds in case billing has been reinstated by user
+    if (Date.now() - gcsBillingErrorTime > 30000) {
+      gcsDisabledDueToBilling = false; // Reset to retry on next request
+      return true;
+    }
+    return false;
+  }
+  return true;
 }
 
 if (process.env.GCS_ACCESS_KEY && process.env.GCS_SECRET_KEY) {
@@ -513,7 +526,7 @@ app.post("/api/upload-image", async (req, res) => {
     // Save locally as quick-access cache / fallback
     fs.writeFileSync(filePath, buffer);
 
-    if (s3Client && !gcsDisabledDueToBilling) {
+    if (isGcsAvailable()) {
       try {
         console.log(`[GCS Sync Client] Initiating bucket upload for: ${safeFilename}`);
         const command = new PutObjectCommand({
@@ -875,7 +888,7 @@ app.get("/api/products", async (req, res) => {
 
 app.get("/api/uploaded-images", async (req, res) => {
   try {
-    if (s3Client && !gcsDisabledDueToBilling) {
+    if (isGcsAvailable()) {
       try {
         console.log(`[GCS Sync Client] Listing objects in GCS bucket: ${bucketName}`);
         const command = new ListObjectsV2Command({
@@ -937,7 +950,7 @@ app.delete("/api/uploaded-images/:filename", async (req, res) => {
     const filePath = path.join(publicDir, safeFilename);
 
     let deletedFromGcs = false;
-    if (s3Client && !gcsDisabledDueToBilling) {
+    if (isGcsAvailable()) {
       try {
         console.log(`[GCS Sync Client] Deleting from GCS bucket: ${safeFilename}`);
         const command = new DeleteObjectCommand({
@@ -977,7 +990,7 @@ app.get(["/:filename", "/products/:filename", "/images/:filename"], async (req, 
   }
 
   // 1. Try Google Cloud Storage first if enabled
-  if (s3Client && !gcsDisabledDueToBilling) {
+  if (isGcsAvailable()) {
     try {
       const command = new GetObjectCommand({
         Bucket: bucketName,
@@ -1014,7 +1027,7 @@ app.get(["/:filename", "/products/:filename", "/images/:filename"], async (req, 
     const stats = fs.statSync(exactPath);
     if (stats.size > 0) {
       // Background sync accurate local file to GCS
-      if (s3Client && !gcsDisabledDueToBilling) {
+      if (isGcsAvailable()) {
         fs.readFile(exactPath, (err, data) => {
           if (!err && data && s3Client) {
             const uploadCmd = new PutObjectCommand({
@@ -1056,7 +1069,7 @@ app.get(["/:filename", "/products/:filename", "/images/:filename"], async (req, 
 
       if (bestMatch) {
         // If bestMatch exists and s3Client is initialized, we can asynchronously upload it to GCS for future instant serving!
-        if (s3Client && !gcsDisabledDueToBilling) {
+        if (isGcsAvailable()) {
           const localMatchPath = path.join(publicDir, bestMatch);
           fs.readFile(localMatchPath, (err, data) => {
             if (!err && data && s3Client) {

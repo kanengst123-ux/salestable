@@ -36,7 +36,11 @@ import {
   Share,
   Smartphone,
   Settings,
-  Download
+  Download,
+  Lock,
+  KeyRound,
+  LogOut,
+  ShieldCheck
 } from "lucide-react";
 
 interface Product {
@@ -299,6 +303,59 @@ const ProductImage: React.FC<{
 };
 
 export default function App() {
+  // System Passcode Lock Authentication State (Hardcoded password: 9632)
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("app_authenticated_9632") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [passcode, setPasscode] = useState<string>("");
+  const [passcodeError, setPasscodeError] = useState<boolean>(false);
+
+  const handleVerifyPasscode = (inputCode?: string) => {
+    const codeToTest = inputCode !== undefined ? inputCode : passcode;
+    if (codeToTest === "9632") {
+      try {
+        localStorage.setItem("app_authenticated_9632", "true");
+      } catch (e) {
+        console.warn("Storage write failed for auth:", e);
+      }
+      setIsAuthenticated(true);
+      setPasscodeError(false);
+      setPasscode("");
+    } else {
+      setPasscodeError(true);
+      setPasscode("");
+    }
+  };
+
+  const handlePasscodeChange = (newVal: string) => {
+    const digitsOnly = newVal.replace(/\D/g, "").slice(0, 4);
+    setPasscode(digitsOnly);
+    setPasscodeError(false);
+    if (digitsOnly.length === 4) {
+      if (digitsOnly === "9632") {
+        handleVerifyPasscode(digitsOnly);
+      } else {
+        setPasscodeError(true);
+        setTimeout(() => setPasscode(""), 400);
+      }
+    }
+  };
+
+  const handleLogout = () => {
+    try {
+      localStorage.removeItem("app_authenticated_9632");
+    } catch (e) {
+      console.warn("Storage remove failed for auth:", e);
+    }
+    setIsAuthenticated(false);
+    setPasscode("");
+    showToast("已登出，系統存取已鎖定");
+  };
+
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedPriceTier, setSelectedPriceTier] = useState<"A" | "B" | "C">(() => {
     try {
@@ -1212,16 +1269,6 @@ export default function App() {
             pageNum++;
             drawPageTopHeader();
             currentY = 14;
-
-            // Continuation category header
-            const contImg = createCategoryTitleDataUrl(`${catName} (續)`);
-            if (contImg.dataUrl) {
-              doc.addImage(contImg.dataUrl, "PNG", startX, currentY, contImg.widthMm, contImg.heightMm);
-            }
-            doc.setDrawColor(226, 232, 240);
-            doc.setLineWidth(0.3);
-            doc.line(startX, currentY + 8, 204, currentY + 8);
-            currentY += 9.5;
           }
 
           // Render cards in the row
@@ -2245,6 +2292,136 @@ export default function App() {
     return cart.reduce((total, item) => total + item.quantity, 0);
   }, [cart]);
 
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 relative overflow-hidden font-sans">
+        {/* Background ambient lighting */}
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl pointer-events-none"></div>
+        <div className="absolute bottom-10 right-10 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div className="w-full max-w-md bg-slate-900/90 border border-slate-800 backdrop-blur-xl rounded-3xl p-8 shadow-2xl relative z-10 text-center space-y-6 animate-fadeIn">
+          {/* Logo & Lock Badge */}
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-tr from-indigo-600 to-slate-800 border border-indigo-500/30 flex items-center justify-center shadow-lg shadow-indigo-900/40">
+            <Lock className="w-8 h-8 text-white animate-pulse" />
+          </div>
+
+          <div className="space-y-1">
+            <h1 className="text-xl font-black tracking-tight text-white">
+              Salestable 系統存取驗證
+            </h1>
+            <p className="text-xs text-slate-400 font-medium">
+              請輸入 4 位數存取密碼以繼續存取產品目錄系統
+            </p>
+          </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleVerifyPasscode();
+            }}
+            className="space-y-5"
+          >
+            {/* Hidden Input for physical/mobile keyboard focus */}
+            <input
+              type="password"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={4}
+              autoFocus
+              value={passcode}
+              onChange={(e) => handlePasscodeChange(e.target.value)}
+              className="sr-only"
+              id="passcode-input"
+            />
+
+            {/* 4 PIN Boxes Display */}
+            <div
+              onClick={() => document.getElementById("passcode-input")?.focus()}
+              className={`flex justify-center gap-3 cursor-pointer py-2 ${
+                passcodeError ? "animate-shake" : ""
+              }`}
+            >
+              {[0, 1, 2, 3].map((idx) => {
+                const isFilled = passcode.length > idx;
+                return (
+                  <div
+                    key={idx}
+                    className={`w-14 h-16 rounded-2xl border-2 flex items-center justify-center text-2xl font-black transition-all ${
+                      passcodeError
+                        ? "border-rose-500 bg-rose-950/40 text-rose-400 shadow-lg shadow-rose-950/50"
+                        : isFilled
+                        ? "border-indigo-500 bg-indigo-950/60 text-indigo-300 shadow-md shadow-indigo-950/50 scale-105"
+                        : "border-slate-800 bg-slate-950/60 text-slate-600"
+                    }`}
+                  >
+                    {isFilled ? "●" : ""}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Error Message */}
+            {passcodeError ? (
+              <p className="text-xs font-bold text-rose-400 bg-rose-950/40 border border-rose-900/50 py-2 px-3 rounded-xl flex items-center justify-center gap-1.5 animate-fadeIn">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>密碼錯誤，請重新輸入 (預設密碼: 9632)</span>
+              </p>
+            ) : (
+              <p className="text-[11px] text-slate-500 font-medium">
+                可使用鍵盤直接輸入，或點擊下方數字鍵
+              </p>
+            )}
+
+            {/* Touch On-Screen Keypad */}
+            <div className="grid grid-cols-3 gap-2.5 max-w-xs mx-auto pt-1">
+              {["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "⌫"].map(
+                (btn) => (
+                  <button
+                    key={btn}
+                    type="button"
+                    onClick={() => {
+                      if (btn === "C") {
+                        setPasscode("");
+                        setPasscodeError(false);
+                      } else if (btn === "⌫") {
+                        setPasscode((prev) => prev.slice(0, -1));
+                        setPasscodeError(false);
+                      } else {
+                        if (passcode.length < 4) {
+                          handlePasscodeChange(passcode + btn);
+                        }
+                      }
+                    }}
+                    className={`py-3 rounded-2xl font-bold text-lg transition-all active:scale-95 cursor-pointer ${
+                      btn === "C" || btn === "⌫"
+                        ? "bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 border border-slate-700/50"
+                        : "bg-slate-800 hover:bg-slate-700 text-white border border-slate-700/60 shadow-xs"
+                    }`}
+                  >
+                    {btn}
+                  </button>
+                )
+              )}
+            </div>
+
+            <button
+              type="submit"
+              disabled={passcode.length < 4}
+              className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white font-extrabold text-sm shadow-lg shadow-indigo-900/50 transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <KeyRound className="w-4 h-4" />
+              <span>確認登入</span>
+            </button>
+          </form>
+
+          <p className="text-[10px] text-slate-500 font-mono pt-2">
+            Salestable Catalog System • Password Protected
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div id="app-root" className="min-h-screen bg-[#f8fafc] text-indigo-950 font-sans antialiased text-sm">
       {/* Dynamic Toast Portal */}
@@ -2283,11 +2460,19 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Present Catalog button! Prominent as requested */}
-              <div className="flex items-center gap-3">
+              {/* Present Catalog button & Lock System Button */}
+              <div className="flex items-center gap-2 sm:gap-3">
+                <button
+                  onClick={handleLogout}
+                  className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                  title="登出並鎖定系統"
+                >
+                  <LogOut className="w-4 h-4 text-slate-500" />
+                  <span className="hidden sm:inline">鎖定系統</span>
+                </button>
                 <button
                   onClick={() => setViewMode("customer")}
-                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md shadow-emerald-100 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] animate-pulse hover:animate-none"
+                  className="px-4 sm:px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md shadow-emerald-100 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] animate-pulse hover:animate-none"
                   title="展示用戶端商品圖冊和詢價下單流程"
                 >
                   <Eye className="w-4 h-4 text-white" />
@@ -2725,6 +2910,16 @@ export default function App() {
                 >
                   <Settings className="w-4 h-4 text-indigo-600 animate-spin" style={{ animationDuration: '6s' }} />
                   <span>後台管理 ⚙️</span>
+                </button>
+
+                {/* Lock App / Logout */}
+                <button
+                  onClick={handleLogout}
+                  className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+                  title="鎖定系統"
+                >
+                  <LogOut className="w-4 h-4 text-slate-500" />
+                  <span className="hidden sm:inline">鎖定</span>
                 </button>
 
                 {/* Inquiry Trigger Drawer button */}
