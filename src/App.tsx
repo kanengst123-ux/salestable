@@ -514,8 +514,9 @@ export default function App() {
   ) => {
     const groups: Record<string, Product[]> = {};
 
+    // Exclude only products explicitly marked with 'X' (PX / excluded items)
     const costProducts = prods.filter(
-      p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "" && p.costCategorySymbol.trim().toUpperCase() !== "X"
+      p => !(p.costCategorySymbol && p.costCategorySymbol.trim().toUpperCase() === "X")
     );
 
     const highlightCats = (cCat.highlightCategories && cCat.highlightCategories.length > 0)
@@ -529,7 +530,7 @@ export default function App() {
     // 1. Top Section: Highlight Categories (Duplicated products matching Col M 'Categories')
     highlightCats.forEach(hCat => {
       const matching = costProducts.filter(p => {
-        const catField = p.extraAttributes?.["Categories"] || "";
+        const catField = (p.extraAttributes && (p.extraAttributes["Categories"] || p.extraAttributes["Categories/分類"])) || (p.allValues ? p.allValues[12] : "") || "";
         if (!catField) return false;
         return catField.includes(hCat);
       });
@@ -551,7 +552,17 @@ export default function App() {
     // 2. Main Section: Remaining categories ordered by sequence in Col E of Cost tab
     const mainGroups: Record<string, Product[]> = {};
     costProducts.forEach(p => {
-      const cat = p.costCategoryName?.trim() || p.extraAttributes?.["Categories"]?.split("/")[0]?.trim() || "其他分類";
+      let cat = p.costCategoryName?.trim() || "";
+      if (!cat) {
+        const catField = (p.extraAttributes && (p.extraAttributes["Categories"] || p.extraAttributes["Categories/分類"])) || (p.allValues ? p.allValues[12] : "") || "";
+        if (catField) {
+          const parts = catField.split("\n").map(s => s.trim()).filter(Boolean);
+          const nonHighlight = parts.find(part => !part.includes("新貨") && !part.includes("清貨") && !part.includes("熱賣"));
+          cat = nonHighlight || parts[0] || "其他分類";
+        } else {
+          cat = "其他分類";
+        }
+      }
       if (!mainGroups[cat]) {
         mainGroups[cat] = [];
       }

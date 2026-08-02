@@ -883,9 +883,18 @@ app.get("/api/products", async (req, res) => {
 
     // Decorate products with cost tab category symbol, name, and costName
     const decoratedProducts = allRawProducts.map((p: any) => {
-      const symbol = (costCategories.productIdToSymbol || {})[p.id] || "";
-      const name = (costCategories.symbolToName || {})[symbol] || "";
+      let symbol = (costCategories.productIdToSymbol || {})[p.id] || "";
+      let name = (costCategories.symbolToName || {})[symbol] || "";
       const costName = (costCategories.productIdToCostName || {})[p.id] || p.name;
+
+      if (!symbol) {
+        const rawCat = (p.extraAttributes && (p.extraAttributes["Categories"] || p.extraAttributes["Categories/分類"])) || (p.allValues ? p.allValues[12] : "") || "";
+        if (rawCat) {
+          symbol = getSymbolForCategoryName(rawCat, costCategories.symbolToName);
+          name = costCategories.symbolToName[symbol] || "";
+        }
+      }
+
       return {
         ...p,
         costCategorySymbol: symbol,
