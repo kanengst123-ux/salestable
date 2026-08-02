@@ -740,25 +740,19 @@ export default function App() {
     }
   };
 
-  // Helper to generate crisp canvas brand sub-section header for jsPDF
+  // Helper to generate crisp canvas brand sub-section header for jsPDF (page-width wide)
   const createBrandTitleDataUrl = (text: string): { dataUrl: string, widthMm: number, heightMm: number } => {
     try {
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
       if (!ctx) return { dataUrl: "", widthMm: 0, heightMm: 0 };
 
-      const fontSize = 26;
-      ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", -apple-system, sans-serif`;
-      const textMetrics = ctx.measureText(text);
-      const paddingX = 14;
-      const paddingY = 6;
-      const width = Math.ceil(textMetrics.width + paddingX * 2 + 10);
-      const height = Math.ceil(fontSize + paddingY * 2);
-
+      const width = 1200;
+      const height = 38;
       canvas.width = width;
       canvas.height = height;
 
-      // Fill background pill
+      // Fill full width background banner
       ctx.fillStyle = "#f1f5f9"; // slate-100
       ctx.beginPath();
       if (typeof (ctx as any).roundRect === "function") {
@@ -777,20 +771,20 @@ export default function App() {
       ctx.fillStyle = "#2563eb"; // blue-600
       ctx.beginPath();
       if (typeof (ctx as any).roundRect === "function") {
-        (ctx as any).roundRect(4, 4, 5, height - 8, 2.5);
+        (ctx as any).roundRect(4, 4, 8, height - 8, 3);
       } else {
-        ctx.rect(4, 4, 5, height - 8);
+        ctx.rect(4, 4, 8, height - 8);
       }
       ctx.fill();
 
       // Text fill
       ctx.fillStyle = "#0f172a"; // slate-900
-      ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", -apple-system, sans-serif`;
+      ctx.font = `bold 22px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", -apple-system, sans-serif`;
       ctx.textBaseline = "middle";
-      ctx.fillText(text, paddingX + 4, height / 2 + 1);
+      ctx.fillText(text, 24, height / 2 + 1);
 
-      const heightMm = 5.2;
-      const widthMm = (width / height) * heightMm;
+      const widthMm = 198; // Page width wide (from startX=6 to 204mm)
+      const heightMm = 6.0;
       return { dataUrl: canvas.toDataURL("image/png"), widthMm, heightMm };
     } catch (e) {
       return { dataUrl: "", widthMm: 0, heightMm: 0 };
@@ -1254,33 +1248,16 @@ export default function App() {
       let pageNum = 1;
       let currentY = 297; // Initialized past page bottom to force new page for first category
 
+      const pageStartY = 6.5;
       const cardW = 47.5;
       const cardH = 65.5;
       const gapX = 3;
       const gapY = 3.5;
       const startX = 6;
-      const maxY = 280;
+      const maxY = 282;
 
-      const drawPageTopHeader = () => {
-        if (fontAdded) {
-          doc.setFont("NotoSansTC", "normal");
-        } else {
-          doc.setFont("helvetica", "normal");
-        }
-        doc.setFontSize(9);
-        doc.setTextColor(15, 23, 42); // slate-900
-        doc.text("商品目錄 / Product Catalog", 6, 9);
-
-        doc.setFontSize(7.5);
-        doc.setTextColor(100, 116, 139); // slate-500
-        doc.text(`Price Tier: ${selectedPriceTier} 系列 | 產出日期: ${nowStr}`, 105, 9, { align: "center" });
-        doc.text(`頁碼: ${pageNum}`, 204, 9, { align: "right" });
-
-        // Divider line
-        doc.setDrawColor(226, 232, 240);
-        doc.setLineWidth(0.3);
-        doc.line(6, 11, 204, 11);
-      };
+      // Top header removed as requested
+      const drawPageTopHeader = () => {};
 
       // Extract and sort brand words from Col G (Cost tab) by length descending
       const brandWords = (costCategories.brands && costCategories.brands.length > 0)
@@ -1334,8 +1311,8 @@ export default function App() {
           doc.addPage();
           pageNum++;
           drawPageTopHeader();
-          currentY = 14;
-        } else if (currentY > 14) {
+          currentY = pageStartY;
+        } else if (currentY > pageStartY) {
           currentY += 2; // small separator space before new category on same page
         }
 
@@ -1368,17 +1345,17 @@ export default function App() {
 
           // Render Brand Sub-Header if brandName is present
           if (subGroup.brandName) {
-            // Check if brand sub-header + 1 row of cards fits on current page (5.2mm + 2.5mm gap + 65.5mm card = 73.2mm)
-            if (currentY + 73.2 > maxY) {
+            // Check if brand sub-header + 1 row of cards fits on current page (6mm + 2.5mm gap + 65.5mm card = 74mm)
+            if (currentY + 74 > maxY) {
               doc.addPage();
               pageNum++;
               drawPageTopHeader();
-              currentY = 14;
+              currentY = pageStartY;
             }
 
             const brandImg = createBrandTitleDataUrl(subGroup.brandName);
             if (brandImg.dataUrl) {
-              doc.addImage(brandImg.dataUrl, "PNG", startX, currentY, brandImg.widthMm, brandImg.heightMm);
+              doc.addImage(brandImg.dataUrl, "PNG", startX, currentY, 198, brandImg.heightMm);
               currentY += brandImg.heightMm + 2.5;
             } else if (fontAdded) {
               doc.setFontSize(10);
@@ -1398,7 +1375,7 @@ export default function App() {
               doc.addPage();
               pageNum++;
               drawPageTopHeader();
-              currentY = 14;
+              currentY = pageStartY;
             }
 
             // Render cards in the row
