@@ -514,10 +514,16 @@ export default function App() {
   ) => {
     const groups: Record<string, Product[]> = {};
 
-    // Exclude only products explicitly marked with 'X' (PX / excluded items)
-    const costProducts = prods.filter(
-      p => !(p.costCategorySymbol && p.costCategorySymbol.trim().toUpperCase() === "X")
-    );
+    // Filter products for PDF catalog: disregard Cost tab rules, only show products not marked as 'N' in Col AE ('show on pdf') of 'raw' tab
+    const pdfProducts = prods.filter(p => {
+      const showPdfVal = (
+        p.extraAttributes?.["show on pdf"] ||
+        p.extraAttributes?.["show on pdf "] ||
+        (p.allValues ? p.allValues[30] : "") ||
+        ""
+      ).trim().toUpperCase();
+      return showPdfVal !== "N";
+    });
 
     const highlightCats = (cCat.highlightCategories && cCat.highlightCategories.length > 0)
       ? cCat.highlightCategories
@@ -529,7 +535,7 @@ export default function App() {
 
     // 1. Top Section: Highlight Categories (Duplicated products matching Col M 'Categories')
     highlightCats.forEach(hCat => {
-      const matching = costProducts.filter(p => {
+      const matching = pdfProducts.filter(p => {
         const catField = (p.extraAttributes && (p.extraAttributes["Categories"] || p.extraAttributes["Categories/分類"])) || (p.allValues ? p.allValues[12] : "") || "";
         if (!catField) return false;
         return catField.includes(hCat);
@@ -551,7 +557,7 @@ export default function App() {
 
     // 2. Main Section: Remaining categories ordered by sequence in Col E of Cost tab
     const mainGroups: Record<string, Product[]> = {};
-    costProducts.forEach(p => {
+    pdfProducts.forEach(p => {
       let cat = p.costCategoryName?.trim() || "";
       if (!cat) {
         const catField = (p.extraAttributes && (p.extraAttributes["Categories"] || p.extraAttributes["Categories/分類"])) || (p.allValues ? p.allValues[12] : "") || "";
@@ -2244,9 +2250,17 @@ export default function App() {
   const processedProducts = useMemo(() => {
     let result = [...products];
 
-    // Restrict customer catalog mode to products in the 'cost' tab of the Google Sheet (excluding category X)
+    // Restrict customer catalog mode to products not marked as 'N' in Col AE ('show on pdf')
     if (viewMode === "customer") {
-      result = result.filter(p => p.costCategorySymbol && p.costCategorySymbol.trim() !== "" && p.costCategorySymbol.trim().toUpperCase() !== "X");
+      result = result.filter(p => {
+        const showPdfVal = (
+          p.extraAttributes?.["show on pdf"] ||
+          p.extraAttributes?.["show on pdf "] ||
+          (p.allValues ? p.allValues[30] : "") ||
+          ""
+        ).trim().toUpperCase();
+        return showPdfVal !== "N";
+      });
     }
 
     // 1. Search Query Filter
