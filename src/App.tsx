@@ -460,12 +460,14 @@ export default function App() {
     productIdToCostName?: Record<string, string>;
     categoryOrder?: { symbol: string; name: string }[];
     highlightCategories?: string[];
+    brands?: string[];
   }>({
     symbolToName: {},
     productIdToSymbol: {},
     productIdToCostName: {},
     categoryOrder: [],
-    highlightCategories: []
+    highlightCategories: [],
+    brands: []
   });
   const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState<boolean>(false);
   const [isStockDropdownOpen, setIsStockDropdownOpen] = useState<boolean>(false);
@@ -731,6 +733,63 @@ export default function App() {
       ctx.fillText(text, 0, height / 2 + 1);
 
       const heightMm = 7.5;
+      const widthMm = (width / height) * heightMm;
+      return { dataUrl: canvas.toDataURL("image/png"), widthMm, heightMm };
+    } catch (e) {
+      return { dataUrl: "", widthMm: 0, heightMm: 0 };
+    }
+  };
+
+  // Helper to generate crisp canvas brand sub-section header for jsPDF
+  const createBrandTitleDataUrl = (text: string): { dataUrl: string, widthMm: number, heightMm: number } => {
+    try {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return { dataUrl: "", widthMm: 0, heightMm: 0 };
+
+      const fontSize = 26;
+      ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", -apple-system, sans-serif`;
+      const textMetrics = ctx.measureText(text);
+      const paddingX = 14;
+      const paddingY = 6;
+      const width = Math.ceil(textMetrics.width + paddingX * 2 + 10);
+      const height = Math.ceil(fontSize + paddingY * 2);
+
+      canvas.width = width;
+      canvas.height = height;
+
+      // Fill background pill
+      ctx.fillStyle = "#f1f5f9"; // slate-100
+      ctx.beginPath();
+      if (typeof (ctx as any).roundRect === "function") {
+        (ctx as any).roundRect(0, 0, width, height, 6);
+      } else {
+        ctx.rect(0, 0, width, height);
+      }
+      ctx.fill();
+
+      // Border stroke
+      ctx.strokeStyle = "#cbd5e1"; // slate-300
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Left blue accent indicator
+      ctx.fillStyle = "#2563eb"; // blue-600
+      ctx.beginPath();
+      if (typeof (ctx as any).roundRect === "function") {
+        (ctx as any).roundRect(4, 4, 5, height - 8, 2.5);
+      } else {
+        ctx.rect(4, 4, 5, height - 8);
+      }
+      ctx.fill();
+
+      // Text fill
+      ctx.fillStyle = "#0f172a"; // slate-900
+      ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", -apple-system, sans-serif`;
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, paddingX + 4, height / 2 + 1);
+
+      const heightMm = 5.2;
       const widthMm = (width / height) * heightMm;
       return { dataUrl: canvas.toDataURL("image/png"), widthMm, heightMm };
     } catch (e) {
@@ -1223,9 +1282,52 @@ export default function App() {
         doc.line(6, 11, 204, 11);
       };
 
+      // Extract and sort brand words from Col G (Cost tab) by length descending
+      const brandWords = (costCategories.brands && costCategories.brands.length > 0)
+        ? [...costCategories.brands].sort((a, b) => b.length - a.length)
+        : [];
+
       activeCategories.forEach((catName) => {
         const catItems = categoryMap[catName];
         if (!catItems || catItems.length === 0) return;
+
+        // Group catItems into brand sub-groups based on Col G brand words
+        interface BrandSubGroup {
+          brandName?: string;
+          items: typeof catItems;
+        }
+
+        const brandSubGroups: BrandSubGroup[] = [];
+        let unassignedItems = [...catItems];
+
+        if (brandWords.length > 0) {
+          brandWords.forEach(brand => {
+            const brandTrimmed = brand.trim();
+            const brandLower = brandTrimmed.toLowerCase();
+            if (!brandLower) return;
+
+            const matching: typeof catItems = [];
+            const remaining: typeof catItems = [];
+
+            unassignedItems.forEach(item => {
+              const pName = (item.product.costName || item.product.name || "").toLowerCase();
+              if (pName.includes(brandLower)) {
+                matching.push(item);
+              } else {
+                remaining.push(item);
+              }
+            });
+
+            if (matching.length > 0) {
+              brandSubGroups.push({ brandName: brandTrimmed, items: matching });
+              unassignedItems = remaining;
+            }
+          });
+        }
+
+        if (unassignedItems.length > 0) {
+          brandSubGroups.push({ brandName: undefined, items: unassignedItems });
+        }
 
         // Check if we need a new page for Category Header + 1 row of cards (8mm + 65.5mm = 73.5mm)
         if (currentY + 73.5 > maxY) {
@@ -1259,183 +1361,214 @@ export default function App() {
         doc.line(startX, currentY + 8, 204, currentY + 8);
         currentY += 9.5;
 
-        // Render items in rows of 4
-        for (let i = 0; i < catItems.length; i += 4) {
-          const rowItems = catItems.slice(i, i + 4);
+        // Render each brand sub-group
+        brandSubGroups.forEach((subGroup) => {
+          const subItems = subGroup.items;
+          if (!subItems || subItems.length === 0) return;
 
-          // Check if this row fits on current page
-          if (currentY + cardH > maxY) {
-            doc.addPage();
-            pageNum++;
-            drawPageTopHeader();
-            currentY = 14;
+          // Render Brand Sub-Header if brandName is present
+          if (subGroup.brandName) {
+            // Check if brand sub-header + 1 row of cards fits on current page (5.2mm + 2.5mm gap + 65.5mm card = 73.2mm)
+            if (currentY + 73.2 > maxY) {
+              doc.addPage();
+              pageNum++;
+              drawPageTopHeader();
+              currentY = 14;
+            }
+
+            const brandImg = createBrandTitleDataUrl(subGroup.brandName);
+            if (brandImg.dataUrl) {
+              doc.addImage(brandImg.dataUrl, "PNG", startX, currentY, brandImg.widthMm, brandImg.heightMm);
+              currentY += brandImg.heightMm + 2.5;
+            } else if (fontAdded) {
+              doc.setFontSize(10);
+              doc.setFont("NotoSansTC", "bold");
+              doc.setTextColor(30, 41, 59);
+              doc.text(`■ ${subGroup.brandName}`, startX, currentY + 4);
+              currentY += 6.5;
+            }
           }
 
-          // Render cards in the row
-          rowItems.forEach((item, col) => {
-            const cx = startX + col * (cardW + gapX);
-            const cy = currentY;
+          // Render items in rows of 4
+          for (let i = 0; i < subItems.length; i += 4) {
+            const rowItems = subItems.slice(i, i + 4);
 
-            const p = item.product;
-            const isOutOfStock = !p.hasStock;
-
-            // 1. Card Frame
-            const hasCategoryLabel = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].trim() !== "";
-            if (isOutOfStock) {
-              doc.setDrawColor(203, 213, 225); // muted slate-300 border
-              doc.setLineWidth(0.35);
-              doc.setFillColor(248, 250, 252); // light slate-50 card body
-            } else if (hasCategoryLabel) {
-              doc.setDrawColor(212, 175, 55); // Gold border color
-              doc.setLineWidth(0.75); // thicker gold border
-              doc.setFillColor(255, 255, 255); // white card body
-            } else {
-              doc.setDrawColor(28, 49, 115); // brand navy border
-              doc.setLineWidth(0.35);
-              doc.setFillColor(255, 255, 255); // white card body
+            // Check if this row fits on current page
+            if (currentY + cardH > maxY) {
+              doc.addPage();
+              pageNum++;
+              drawPageTopHeader();
+              currentY = 14;
             }
-            doc.roundedRect(cx, cy, cardW, cardH, 2, 2, "FD");
 
-            // 2. Image inside Card
-            const pad = 1.5;
-            const imgBoxW = cardW - (pad * 2); // 44.5 mm
-            const imgBoxH = 51.5; // 51.5 mm
-            const imgX_base = cx + pad;
-            const imgY_base = cy + pad;
+            // Render cards in the row
+            rowItems.forEach((item, col) => {
+              const cx = startX + col * (cardW + gapX);
+              const cy = currentY;
 
-            if (item.imgData) {
-              try {
-                let imgW = imgBoxW;
-                let imgH = imgBoxH;
-                let imgX = imgX_base;
-                let imgY = imgY_base;
+              const p = item.product;
+              const isOutOfStock = !p.hasStock;
 
-                const originalW = item.width;
-                const originalH = item.height;
+              // 1. Card Frame
+              const hasCategoryLabel = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].trim() !== "";
+              if (isOutOfStock) {
+                doc.setDrawColor(203, 213, 225); // muted slate-300 border
+                doc.setLineWidth(0.35);
+                doc.setFillColor(248, 250, 252); // light slate-50 card body
+              } else if (hasCategoryLabel) {
+                doc.setDrawColor(212, 175, 55); // Gold border color
+                doc.setLineWidth(0.75); // thicker gold border
+                doc.setFillColor(255, 255, 255); // white card body
+              } else {
+                doc.setDrawColor(28, 49, 115); // brand navy border
+                doc.setLineWidth(0.35);
+                doc.setFillColor(255, 255, 255); // white card body
+              }
+              doc.roundedRect(cx, cy, cardW, cardH, 2, 2, "FD");
 
-                if (originalW && originalH) {
-                  const targetRatio = imgBoxW / imgBoxH;
-                  const imageRatio = originalW / originalH;
+              // 2. Image inside Card
+              const pad = 1.5;
+              const imgBoxW = cardW - (pad * 2); // 44.5 mm
+              const imgBoxH = 51.5; // 51.5 mm
+              const imgX_base = cx + pad;
+              const imgY_base = cy + pad;
 
-                  if (imageRatio > targetRatio) {
-                    imgW = imgBoxW;
-                    imgH = imgBoxW / imageRatio;
-                  } else {
-                    imgH = imgBoxH;
-                    imgW = imgBoxH * imageRatio;
+              if (item.imgData) {
+                try {
+                  let imgW = imgBoxW;
+                  let imgH = imgBoxH;
+                  let imgX = imgX_base;
+                  let imgY = imgY_base;
+
+                  const originalW = item.width;
+                  const originalH = item.height;
+
+                  if (originalW && originalH) {
+                    const targetRatio = imgBoxW / imgBoxH;
+                    const imageRatio = originalW / originalH;
+
+                    if (imageRatio > targetRatio) {
+                      imgW = imgBoxW;
+                      imgH = imgBoxW / imageRatio;
+                    } else {
+                      imgH = imgBoxH;
+                      imgW = imgBoxH * imageRatio;
+                    }
+                    imgX = imgX_base + (imgBoxW - imgW) / 2;
+                    imgY = imgY_base + (imgBoxH - imgH) / 2;
                   }
-                  imgX = imgX_base + (imgBoxW - imgW) / 2;
-                  imgY = imgY_base + (imgBoxH - imgH) / 2;
-                }
 
-                doc.addImage(item.imgData, item.format || "JPEG", imgX, imgY, imgW, imgH);
+                  doc.addImage(item.imgData, item.format || "JPEG", imgX, imgY, imgW, imgH);
 
-                // Draw semi-transparent overlay for out-of-stock items
-                if (isOutOfStock) {
-                  try {
-                    const gState = new (doc as any).GState({ opacity: 0.55 });
-                    doc.setGState(gState);
-                    doc.setFillColor(220, 225, 230);
-                    doc.rect(imgX_base, imgY_base, imgBoxW, imgBoxH, "F");
-                    doc.setGState(new (doc as any).GState({ opacity: 1.0 }));
-                  } catch (gStateErr) {
-                    doc.setFillColor(241, 245, 249);
+                  // Draw semi-transparent overlay for out-of-stock items
+                  if (isOutOfStock) {
+                    try {
+                      const gState = new (doc as any).GState({ opacity: 0.55 });
+                      doc.setGState(gState);
+                      doc.setFillColor(220, 225, 230);
+                      doc.rect(imgX_base, imgY_base, imgBoxW, imgBoxH, "F");
+                      doc.setGState(new (doc as any).GState({ opacity: 1.0 }));
+                    } catch (gStateErr) {
+                      doc.setFillColor(241, 245, 249);
+                    }
                   }
-                }
 
-                // Draw thin border over the image
-                doc.setDrawColor(226, 232, 240);
-                doc.setLineWidth(0.15);
-                doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "S");
-              } catch (imgErr) {
+                  // Draw thin border over the image
+                  doc.setDrawColor(226, 232, 240);
+                  doc.setLineWidth(0.15);
+                  doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "S");
+                } catch (imgErr) {
+                  doc.setFillColor(248, 250, 252);
+                  doc.setDrawColor(226, 232, 240);
+                  doc.setLineWidth(0.2);
+                  doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "FD");
+                  doc.setTextColor(148, 163, 184);
+                  doc.setFontSize(8);
+                  doc.text("[ 圖片載入失敗 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
+                }
+              } else {
                 doc.setFillColor(248, 250, 252);
                 doc.setDrawColor(226, 232, 240);
                 doc.setLineWidth(0.2);
                 doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "FD");
                 doc.setTextColor(148, 163, 184);
                 doc.setFontSize(8);
-                doc.text("[ 圖片載入失敗 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
+                doc.text("[ 暫無圖片 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
               }
-            } else {
-              doc.setFillColor(248, 250, 252);
+
+              // 3. Category Tag hovering at Top LEFT Corner of Image
+              const catTagLabel = p.costCategoryName || p.extraAttributes?.["Categories"]?.split("/")[0]?.trim() || "";
+              if (catTagLabel) {
+                const isHighlight = ["新貨", "清貨", "季度熱賣"].includes(catTagLabel);
+                const badge = createCategoryBadgeDataUrl(catTagLabel, isHighlight);
+                if (badge.dataUrl) {
+                  doc.addImage(badge.dataUrl, "PNG", imgX_base + 1, imgY_base + 1, badge.widthMm, badge.heightMm);
+                }
+              }
+
+              // 4. Price Tag hovering at Bottom LEFT Corner of Image
+              const priceVal = parseFloat(getProductPrice(p));
+              const priceStr = priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : "請詢價";
+
+              doc.setFontSize(7.5);
+              const pWidth = doc.getTextWidth(priceStr);
+              const badgeW = Math.max(16, pWidth + 3);
+              const badgeH = 5;
+              const badgeX = imgX_base + 1;
+              const badgeY = imgY_base + imgBoxH - badgeH - 1;
+
+              doc.setFillColor(255, 255, 255);
               doc.setDrawColor(226, 232, 240);
-              doc.setLineWidth(0.2);
-              doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "FD");
-              doc.setTextColor(148, 163, 184);
-              doc.setFontSize(8);
-              doc.text("[ 暫無圖片 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
-            }
+              doc.setLineWidth(0.15);
+              doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 0.8, 0.8, "FD");
 
-            // 3. Category Tag hovering at Top LEFT Corner of Image
-            const catTagLabel = p.costCategoryName || p.extraAttributes?.["Categories"]?.split("/")[0]?.trim() || "";
-            if (catTagLabel) {
-              const isHighlight = ["新貨", "清貨", "季度熱賣"].includes(catTagLabel);
-              const badge = createCategoryBadgeDataUrl(catTagLabel, isHighlight);
-              if (badge.dataUrl) {
-                doc.addImage(badge.dataUrl, "PNG", imgX_base + 1, imgY_base + 1, badge.widthMm, badge.heightMm);
-              }
-            }
-
-            // 4. Price Tag hovering at Bottom LEFT Corner of Image
-            const priceVal = parseFloat(getProductPrice(p));
-            const priceStr = priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : "請詢價";
-
-            doc.setFontSize(7.5);
-            const pWidth = doc.getTextWidth(priceStr);
-            const badgeW = Math.max(16, pWidth + 3);
-            const badgeH = 5;
-            const badgeX = imgX_base + 1;
-            const badgeY = imgY_base + imgBoxH - badgeH - 1;
-
-            doc.setFillColor(255, 255, 255);
-            doc.setDrawColor(226, 232, 240);
-            doc.setLineWidth(0.15);
-            doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 0.8, 0.8, "FD");
-
-            if (isOutOfStock) {
-              doc.setTextColor(156, 163, 175);
-            } else {
-              doc.setTextColor(15, 23, 42);
-            }
-            doc.setFontSize(7.5);
-            doc.text(priceStr, badgeX + 1.5, badgeY + 3.7);
-
-            // 5. Product Name at Bottom of Card
-            const textX = cx + 1.5;
-            const nameStartY = imgY_base + imgBoxH + 3.2;
-            const productNameStr = p.costName || p.name || "";
-
-            if (fontAdded) {
-              doc.setFontSize(8);
               if (isOutOfStock) {
                 doc.setTextColor(156, 163, 175);
               } else {
                 doc.setTextColor(15, 23, 42);
               }
-              const wrappedName = doc.splitTextToSize(productNameStr, cardW - 3);
-              const line1 = wrappedName[0] || "";
-              let line2 = wrappedName[1] || "";
-              if (wrappedName.length > 2) {
-                line2 = line2.substring(0, Math.max(0, line2.length - 2)) + "...";
-              }
-              doc.text(line1, textX, nameStartY);
-              if (line2) {
-                doc.text(line2, textX, nameStartY + 3.8);
-              }
-            } else {
-              const textImg = createCanvasTextDataUrl(
-                productNameStr,
-                cardW - 3,
-                isOutOfStock ? "#9ca3af" : "#0f172a"
-              );
-              if (textImg.dataUrl) {
-                doc.addImage(textImg.dataUrl, "PNG", textX, nameStartY - 1, textImg.widthMm, textImg.heightMm);
-              }
-            }
-          });
+              doc.setFontSize(7.5);
+              doc.text(priceStr, badgeX + 1.5, badgeY + 3.7);
 
-          currentY += cardH + gapY;
-        }
+              // 5. Product Name at Bottom of Card
+              const textX = cx + 1.5;
+              const nameStartY = imgY_base + imgBoxH + 3.2;
+              const productNameStr = p.costName || p.name || "";
+
+              if (fontAdded) {
+                doc.setFontSize(8);
+                if (isOutOfStock) {
+                  doc.setTextColor(156, 163, 175);
+                } else {
+                  doc.setTextColor(15, 23, 42);
+                }
+                const wrappedName = doc.splitTextToSize(productNameStr, cardW - 3);
+                const line1 = wrappedName[0] || "";
+                let line2 = wrappedName[1] || "";
+                if (wrappedName.length > 2) {
+                  line2 = line2.substring(0, Math.max(0, line2.length - 2)) + "...";
+                }
+                doc.text(line1, textX, nameStartY);
+                if (line2) {
+                  doc.text(line2, textX, nameStartY + 3.8);
+                }
+              } else {
+                const textImg = createCanvasTextDataUrl(
+                  productNameStr,
+                  cardW - 3,
+                  isOutOfStock ? "#9ca3af" : "#0f172a"
+                );
+                if (textImg.dataUrl) {
+                  doc.addImage(textImg.dataUrl, "PNG", textX, nameStartY - 1, textImg.widthMm, textImg.heightMm);
+                }
+              }
+            });
+
+            currentY += cardH + gapY;
+          }
+
+          currentY += 1.5; // space after brand sub-group
+        });
 
         currentY += 2; // small space after category
       });

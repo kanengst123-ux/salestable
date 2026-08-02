@@ -243,6 +243,7 @@ let costCategoriesCache: {
   productIdToCostName: Record<string, string>;
   categoryOrder: { symbol: string; name: string }[];
   highlightCategories: string[];
+  brands: string[];
 } | null = null;
 let lastCostFetchTime = 0;
 
@@ -266,6 +267,7 @@ async function fetchCostCategories() {
     const productIdToCostName: Record<string, string> = {};
     const categoryOrder: { symbol: string; name: string }[] = [];
     const highlightCategories: string[] = [];
+    const brands: string[] = [];
     const seenSymbols = new Set<string>();
 
     for (let i = 1; i < rows.length; i++) {
@@ -299,6 +301,18 @@ async function fetchCostCategories() {
           }
         }
       }
+
+      if (row.length > 6) {
+        const brandWord = (row[6] || "").replace(/\r/g, "").trim();
+        if (
+          brandWord &&
+          brandWord.toLowerCase() !== "brand" &&
+          brandWord.toLowerCase() !== "品牌" &&
+          !brands.includes(brandWord)
+        ) {
+          brands.push(brandWord);
+        }
+      }
     }
 
     costCategoriesCache = {
@@ -306,7 +320,8 @@ async function fetchCostCategories() {
       productIdToSymbol,
       productIdToCostName,
       categoryOrder,
-      highlightCategories
+      highlightCategories,
+      brands
     };
     lastCostFetchTime = now;
 
@@ -331,7 +346,7 @@ async function fetchCostCategories() {
     } catch (backupError) {
       console.error("No valid cost categories backup found:", backupError);
     }
-    return { symbolToName: {}, productIdToSymbol: {}, productIdToCostName: {}, categoryOrder: [], highlightCategories: [] };
+    return { symbolToName: {}, productIdToSymbol: {}, productIdToCostName: {}, categoryOrder: [], highlightCategories: [], brands: [] };
   }
 }
 
