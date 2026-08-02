@@ -747,44 +747,62 @@ export default function App() {
       const ctx = canvas.getContext("2d");
       if (!ctx) return { dataUrl: "", widthMm: 0, heightMm: 0 };
 
-      const width = 1200;
-      const height = 38;
+      // High-DPI canvas (2400x100 for 300+ DPI output in PDF)
+      const width = 2400;
+      const height = 100;
       canvas.width = width;
       canvas.height = height;
 
-      // Fill full width background banner
-      ctx.fillStyle = "#f1f5f9"; // slate-100
+      // Fill full width dark navy background banner (#1e293b)
+      ctx.fillStyle = "#1e293b"; // slate-800
       ctx.beginPath();
       if (typeof (ctx as any).roundRect === "function") {
-        (ctx as any).roundRect(0, 0, width, height, 6);
+        (ctx as any).roundRect(0, 0, width, height, 16);
       } else {
         ctx.rect(0, 0, width, height);
       }
       ctx.fill();
 
-      // Border stroke
-      ctx.strokeStyle = "#cbd5e1"; // slate-300
-      ctx.lineWidth = 1.5;
+      // Border stroke (#334155 slate-700)
+      ctx.strokeStyle = "#334155";
+      ctx.lineWidth = 3;
       ctx.stroke();
 
-      // Left blue accent indicator
-      ctx.fillStyle = "#2563eb"; // blue-600
+      // Left blue accent indicator (#3b82f6 blue-500)
+      ctx.fillStyle = "#3b82f6";
       ctx.beginPath();
       if (typeof (ctx as any).roundRect === "function") {
-        (ctx as any).roundRect(4, 4, 8, height - 8, 3);
+        (ctx as any).roundRect(12, 12, 20, height - 24, 10);
       } else {
-        ctx.rect(4, 4, 8, height - 8);
+        ctx.rect(12, 12, 20, height - 24);
       }
       ctx.fill();
 
-      // Text fill
-      ctx.fillStyle = "#0f172a"; // slate-900
-      ctx.font = `bold 22px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", -apple-system, sans-serif`;
+      // "品牌" Tag Badge Chip (#2563eb blue-600)
+      ctx.fillStyle = "#2563eb";
+      ctx.beginPath();
+      if (typeof (ctx as any).roundRect === "function") {
+        (ctx as any).roundRect(48, 20, 140, 60, 12);
+      } else {
+        ctx.rect(48, 20, 140, 60);
+      }
+      ctx.fill();
+
+      // "品牌" Text inside Tag Badge
+      ctx.fillStyle = "#ffffff";
+      ctx.font = `bold 28px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", -apple-system, sans-serif`;
       ctx.textBaseline = "middle";
-      ctx.fillText(text, 24, height / 2 + 1);
+      ctx.textAlign = "center";
+      ctx.fillText("品牌", 118, height / 2 + 1);
+
+      // Main Brand Name Text (Bold White)
+      ctx.textAlign = "left";
+      ctx.fillStyle = "#ffffff";
+      ctx.font = `bold 44px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", -apple-system, sans-serif`;
+      ctx.fillText(text, 210, height / 2 + 1);
 
       const widthMm = 198; // Page width wide (from startX=6 to 204mm)
-      const heightMm = 6.0;
+      const heightMm = 8.0; // Increased badge height for high visibility
       return { dataUrl: canvas.toDataURL("image/png"), widthMm, heightMm };
     } catch (e) {
       return { dataUrl: "", widthMm: 0, heightMm: 0 };
