@@ -1299,11 +1299,17 @@ export default function App() {
         ? [...costCategories.brands].sort((a, b) => b.length - a.length)
         : [];
 
+      const highlightCats = (costCategories.highlightCategories && costCategories.highlightCategories.length > 0)
+        ? costCategories.highlightCategories
+        : ["新貨", "清貨", "季度熱賣"];
+
       activeCategories.forEach((catName) => {
         const catItems = categoryMap[catName];
         if (!catItems || catItems.length === 0) return;
 
-        // Group catItems into brand sub-groups based on Col G brand words
+        const isHighlightCat = highlightCats.includes(catName);
+
+        // Group catItems into brand sub-groups based on Col G brand words (skip for Categories under Col E of Cost tab like '新貨', '清貨')
         interface BrandSubGroup {
           brandName?: string;
           items: typeof catItems;
@@ -1312,7 +1318,7 @@ export default function App() {
         const brandSubGroups: BrandSubGroup[] = [];
         let unassignedItems = [...catItems];
 
-        if (brandWords.length > 0) {
+        if (!isHighlightCat && brandWords.length > 0) {
           brandWords.forEach(brand => {
             const brandTrimmed = brand.trim();
             const brandLower = brandTrimmed.toLowerCase();
@@ -1378,8 +1384,8 @@ export default function App() {
           const subItems = subGroup.items;
           if (!subItems || subItems.length === 0) return;
 
-          // Render Brand Sub-Header if brandName is present
-          if (subGroup.brandName) {
+          // Render Brand Sub-Header if brandName is present (and not a highlight category under 'Categories' in Col E of Cost tab)
+          if (subGroup.brandName && !isHighlightCat) {
             // Check if brand sub-header + 1 row of cards fits on current page (6mm + 2.5mm gap + 65.5mm card = 74mm)
             if (currentY + 74 > maxY) {
               doc.addPage();
