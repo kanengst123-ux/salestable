@@ -1514,6 +1514,13 @@ export default function App() {
                 doc.text("[ 暫無圖片 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
               }
 
+              // 2.1 Diagonal Strike Line for Out-of-Stock Items
+              if (isOutOfStock) {
+                doc.setDrawColor(220, 38, 38); // Red-600
+                doc.setLineWidth(0.8);
+                doc.line(imgX_base, imgY_base, imgX_base + imgBoxW, imgY_base + imgBoxH);
+              }
+
               // 3. Category Tag hovering at Top LEFT Corner of Image
               const catTagLabel = p.costCategoryName || p.extraAttributes?.["Categories"]?.split("/")[0]?.trim() || "";
               if (catTagLabel) {
