@@ -680,6 +680,11 @@ app.put("/api/products/:id", (req, res) => {
     const secondaryStockCount = isNaN(qtyNumber) ? "" : qtyNumber.toString();
     const alwaysStock = isNaN(qtyNumber) || quantity === "";
 
+    const finalPrice = price || "0";
+    const finalPriceA = (priceA !== undefined && priceA.toString().trim() !== "") ? priceA.toString().trim() : finalPrice;
+    const finalPriceB = (priceB !== undefined && priceB.toString().trim() !== "") ? priceB.toString().trim() : finalPrice;
+    const finalPriceC = (priceC !== undefined && priceC.toString().trim() !== "") ? priceC.toString().trim() : finalPrice;
+
     let localProducts = getLocalProducts();
     const existingIndex = localProducts.findIndex((p: any) => p.id === id);
 
@@ -687,10 +692,10 @@ app.put("/api/products/:id", (req, res) => {
       const updatedAllValues = [...(localProducts[existingIndex].allValues || [])];
       if (updatedAllValues.length > 28) {
         updatedAllValues[2] = name;
-        updatedAllValues[14] = price || "0";
-        updatedAllValues[17] = priceA || "0";
-        updatedAllValues[18] = priceB || "0";
-        updatedAllValues[19] = priceC || "0";
+        updatedAllValues[14] = finalPrice;
+        updatedAllValues[17] = finalPriceA;
+        updatedAllValues[18] = finalPriceB;
+        updatedAllValues[19] = finalPriceC;
         updatedAllValues[27] = alwaysStock ? "1" : "0";
         updatedAllValues[28] = secondaryStockCount;
       }
@@ -698,10 +703,10 @@ app.put("/api/products/:id", (req, res) => {
       localProducts[existingIndex] = {
         ...localProducts[existingIndex],
         name,
-        price: price || "0",
-        priceA: priceA || price || "0",
-        priceB: priceB || price || "0",
-        priceC: priceC || price || "0",
+        price: finalPrice,
+        priceA: finalPriceA,
+        priceB: finalPriceB,
+        priceC: finalPriceC,
         hasStock,
         alwaysStock,
         secondaryStockCount,
@@ -727,10 +732,10 @@ app.put("/api/products/:id", (req, res) => {
       const updatedAllValues = [...(sheetProduct?.allValues || [])];
       if (updatedAllValues.length > 28) {
         updatedAllValues[2] = name;
-        updatedAllValues[14] = price || "0";
-        updatedAllValues[17] = priceA || "0";
-        updatedAllValues[18] = priceB || "0";
-        updatedAllValues[19] = priceC || "0";
+        updatedAllValues[14] = finalPrice;
+        updatedAllValues[17] = finalPriceA;
+        updatedAllValues[18] = finalPriceB;
+        updatedAllValues[19] = finalPriceC;
         updatedAllValues[27] = alwaysStock ? "1" : "0";
         updatedAllValues[28] = secondaryStockCount;
       }
@@ -738,10 +743,10 @@ app.put("/api/products/:id", (req, res) => {
       const updatedProduct = {
         id,
         name,
-        price: price || "0",
-        priceA: priceA || price || "0",
-        priceB: priceB || price || "0",
-        priceC: priceC || price || "0",
+        price: finalPrice,
+        priceA: finalPriceA,
+        priceB: finalPriceB,
+        priceC: finalPriceC,
         hasStock,
         alwaysStock,
         secondaryStockCount,
@@ -759,7 +764,7 @@ app.put("/api/products/:id", (req, res) => {
     saveLocalProducts(localProducts);
 
     // Sync to Google Sheet if enabled
-    triggerSheetsSync(id, name, price || "0", quantity, remarks || "", "updateProduct", priceA, priceB, priceC);
+    triggerSheetsSync(id, name, finalPrice, quantity, remarks || "", "updateProduct", finalPriceA, finalPriceB, finalPriceC);
 
     res.json({ success: true, message: "Product updated successfully" });
   } catch (error: any) {
@@ -861,7 +866,8 @@ app.get("/api/products", async (req, res) => {
       productIdToSymbol: {},
       productIdToCostName: {},
       categoryOrder: [],
-      highlightCategories: []
+      highlightCategories: [],
+      brands: []
     };
     try {
       costCategories = await fetchCostCategories();

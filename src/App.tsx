@@ -1693,6 +1693,9 @@ export default function App() {
   const [isEditingSelectedProduct, setIsEditingSelectedProduct] = useState<boolean>(false);
   const [editProductName, setEditProductName] = useState<string>("");
   const [editProductPrice, setEditProductPrice] = useState<string>("");
+  const [editProductPriceA, setEditProductPriceA] = useState<string>("");
+  const [editProductPriceB, setEditProductPriceB] = useState<string>("");
+  const [editProductPriceC, setEditProductPriceC] = useState<string>("");
   const [editProductQuantity, setEditProductQuantity] = useState<string>("");
   const [editProductRemarks, setEditProductRemarks] = useState<string>("");
   const [editProductImageFile, setEditProductImageFile] = useState<File | null>(null);
@@ -1952,13 +1955,18 @@ export default function App() {
     try {
       setIsUpdatingProduct(true);
       
+      const finalPrice = editProductPrice.trim() || "0";
+      const finalPriceA = editProductPriceA.trim() || finalPrice;
+      const finalPriceB = editProductPriceB.trim() || finalPrice;
+      const finalPriceC = editProductPriceC.trim() || finalPrice;
+
       const payload = {
         id: selectedProduct.id,
         name: editProductName.trim(),
-        price: editProductPrice.trim() || "0",
-        priceA: editProductPrice.trim(),
-        priceB: editProductPrice.trim(),
-        priceC: editProductPrice.trim(),
+        price: finalPrice,
+        priceA: finalPriceA,
+        priceB: finalPriceB,
+        priceC: finalPriceC,
         quantity: editProductQuantity.trim(),
         remarks: editProductRemarks.trim(),
         base64Image: editProductImagePreview.startsWith("data:image") ? editProductImagePreview : undefined
@@ -1989,20 +1997,20 @@ export default function App() {
       const updatedAllValues = [...(selectedProduct.allValues || [])];
       if (updatedAllValues.length > 28) {
         updatedAllValues[2] = editProductName.trim();
-        updatedAllValues[14] = editProductPrice.trim() || "0";
-        updatedAllValues[17] = editProductPrice.trim();
-        updatedAllValues[18] = editProductPrice.trim();
-        updatedAllValues[19] = editProductPrice.trim();
+        updatedAllValues[14] = finalPrice;
+        updatedAllValues[17] = finalPriceA;
+        updatedAllValues[18] = finalPriceB;
+        updatedAllValues[19] = finalPriceC;
         updatedAllValues[27] = (isNaN(qtyNumber) || editProductQuantity.trim() === "") ? "1" : "0";
         updatedAllValues[28] = isNaN(qtyNumber) ? "" : qtyNumber.toString();
       }
       setSelectedProduct({
         ...selectedProduct,
         name: editProductName.trim(),
-        price: editProductPrice.trim() || "0",
-        priceA: editProductPrice.trim(),
-        priceB: editProductPrice.trim(),
-        priceC: editProductPrice.trim(),
+        price: finalPrice,
+        priceA: finalPriceA,
+        priceB: finalPriceB,
+        priceC: finalPriceC,
         hasStock: hasStock,
         alwaysStock: isNaN(qtyNumber) || editProductQuantity.trim() === "",
         secondaryStockCount: isNaN(qtyNumber) ? "" : qtyNumber.toString(),
@@ -2024,7 +2032,10 @@ export default function App() {
   const handleStartEditing = () => {
     if (!selectedProduct) return;
     setEditProductName(selectedProduct.name);
-    setEditProductPrice(selectedProduct.price);
+    setEditProductPrice(selectedProduct.price || "");
+    setEditProductPriceA(selectedProduct.priceA !== undefined && selectedProduct.priceA !== "" ? selectedProduct.priceA : (selectedProduct.price || ""));
+    setEditProductPriceB(selectedProduct.priceB !== undefined && selectedProduct.priceB !== "" ? selectedProduct.priceB : (selectedProduct.price || ""));
+    setEditProductPriceC(selectedProduct.priceC !== undefined && selectedProduct.priceC !== "" ? selectedProduct.priceC : (selectedProduct.price || ""));
     setEditProductQuantity(selectedProduct.alwaysStock ? "" : (selectedProduct.secondaryStockCount || ""));
     setEditProductRemarks(selectedProduct.extraAttributes?.["Merchant Remark"] || selectedProduct.extraAttributes?.["remarks"] || "");
     setEditProductImageFile(null);
@@ -2991,7 +3002,10 @@ export default function App() {
                                   // Wait tiny tick, then edit
                                   setTimeout(() => {
                                     setEditProductName(prod.name);
-                                    setEditProductPrice(prod.price);
+                                    setEditProductPrice(prod.price || "");
+                                    setEditProductPriceA(prod.priceA !== undefined && prod.priceA !== "" ? prod.priceA : (prod.price || ""));
+                                    setEditProductPriceB(prod.priceB !== undefined && prod.priceB !== "" ? prod.priceB : (prod.price || ""));
+                                    setEditProductPriceC(prod.priceC !== undefined && prod.priceC !== "" ? prod.priceC : (prod.price || ""));
                                     setEditProductQuantity(prod.alwaysStock ? "" : (prod.secondaryStockCount || ""));
                                     setEditProductRemarks(prod.extraAttributes?.["Merchant Remark"] || prod.extraAttributes?.["remarks"] || "");
                                     setEditProductImageFile(null);
@@ -3751,9 +3765,68 @@ export default function App() {
                         type="text"
                         placeholder="例如：61"
                         value={editProductPrice}
-                        onChange={(e) => setEditProductPrice(e.target.value)}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setEditProductPrice(val);
+                        }}
                         className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3 py-2.5 text-xs transition-all outline-none font-mono"
                       />
+                    </div>
+
+                    {/* Tier A, B, C Member Discounted Prices */}
+                    <div className="bg-slate-50/70 p-3.5 rounded-2xl border border-slate-100 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
+                          分級會員價格 (HK$)
+                        </label>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          Col R / S / T
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div>
+                          <label className="block text-[10px] font-bold text-amber-700 mb-1 flex items-center justify-between">
+                            <span>Tier A (GOLD)</span>
+                            <span className="text-slate-400 text-[9px] font-mono">Col R</span>
+                          </label>
+                          <input 
+                            type="text"
+                            placeholder="例如：58"
+                            value={editProductPriceA}
+                            onChange={(e) => setEditProductPriceA(e.target.value)}
+                            className="w-full bg-white border border-slate-200 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-slate-900 rounded-xl px-3 py-2 text-xs transition-all outline-none font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-600 mb-1 flex items-center justify-between">
+                            <span>Tier B (SILVER)</span>
+                            <span className="text-slate-400 text-[9px] font-mono">Col S</span>
+                          </label>
+                          <input 
+                            type="text"
+                            placeholder="例如：60"
+                            value={editProductPriceB}
+                            onChange={(e) => setEditProductPriceB(e.target.value)}
+                            className="w-full bg-white border border-slate-200 focus:border-slate-500 focus:ring-1 focus:ring-slate-500 text-slate-900 rounded-xl px-3 py-2 text-xs transition-all outline-none font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-indigo-600 mb-1 flex items-center justify-between">
+                            <span>Tier C (Basic)</span>
+                            <span className="text-slate-400 text-[9px] font-mono">Col T</span>
+                          </label>
+                          <input 
+                            type="text"
+                            placeholder="例如：65"
+                            value={editProductPriceC}
+                            onChange={(e) => setEditProductPriceC(e.target.value)}
+                            className="w-full bg-white border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-900 rounded-xl px-3 py-2 text-xs transition-all outline-none font-mono"
+                          />
+                        </div>
+                      </div>
+                      <span className="text-[10px] text-slate-400 block font-medium leading-normal">
+                        儲存於試算表「raw」分頁的 Col R (GOLD)、Col S (SILVER) 及 Col T (Basic)。若留空將自動套用基準單價。
+                      </span>
                     </div>
 
                     {/* Quantity Input */}
