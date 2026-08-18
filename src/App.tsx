@@ -360,9 +360,9 @@ export default function App() {
   const [selectedPriceTier, setSelectedPriceTier] = useState<"A" | "B" | "C">(() => {
     try {
       const saved = localStorage.getItem("selected_price_tier");
-      return (saved === "A" || saved === "B" || saved === "C" ? saved : "A");
+      return (saved === "A" || saved === "B" || saved === "C" ? saved : "C");
     } catch {
-      return "A";
+      return "C";
     }
   });
   const [loading, setLoading] = useState<boolean>(true);
@@ -1018,21 +1018,53 @@ export default function App() {
         doc.setFont("helvetica", "normal");
       }
 
-      // Helper to convert blob to base64 with canvas-based downscaling (reduces PDF size from 1GB to 25MB for 1800+ items!)
+      // Helper to convert raw Google Drive / CDN URLs into fast 200-300px edge-compressed thumbnails
+      const getThumbnailUrl = (rawUrl: string): string => {
+        if (!rawUrl) return rawUrl;
+        const cleanUrl = rawUrl.trim();
+
+        // 1. Google Drive view/uc links -> direct fast Google edge thumbnail URL (&sz=w300)
+        const driveFileMatch = cleanUrl.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+        if (driveFileMatch && driveFileMatch[1]) {
+          return `https://drive.google.com/thumbnail?id=${driveFileMatch[1]}&sz=w300`;
+        }
+
+        const driveIdMatch = cleanUrl.match(/drive\.google\.com\/.*[?&]id=([a-zA-Z0-9_-]+)/);
+        if (driveIdMatch && driveIdMatch[1]) {
+          return `https://drive.google.com/thumbnail?id=${driveIdMatch[1]}&sz=w300`;
+        }
+
+        // 2. Google UserContent CDN links (lh3.googleusercontent.com/...)
+        if (cleanUrl.includes("googleusercontent.com")) {
+          const baseUrl = cleanUrl.split("=")[0];
+          return `${baseUrl}=s300`;
+        }
+
+        // 3. Shopify / Shopline image CDN links
+        if (cleanUrl.includes("cdn.shopify.com") || cleanUrl.includes("shopline.com") || cleanUrl.includes("slcdn.com")) {
+          if (!cleanUrl.includes("_300x") && !cleanUrl.includes("_200x")) {
+            return cleanUrl.replace(/(\.(jpg|jpeg|png|webp))/i, "_300x300$1");
+          }
+        }
+
+        return cleanUrl;
+      };
+
+      // Helper to convert blob to base64 with canvas-based downscaling (reduces PDF size and accelerates generation)
       const blobToBase64 = (blob: Blob): Promise<{ base64: string, width: number, height: number }> => {
         return new Promise((resolve) => {
           const img = new Image();
           const url = URL.createObjectURL(blob);
           img.onload = () => {
             URL.revokeObjectURL(url);
-            const originalWidth = img.width || 300;
+            const originalWidth = img.width || 250;
             const originalHeight = img.height || 180;
             let width = img.width;
             let height = img.height;
 
-            // Target dimensions (42x25mm grid means ~300x180px is perfectly crisp for printing at high DPI)
-            const maxWidth = 300;
-            const maxHeight = 180;
+            // Target dimensions for 44.5x51.5mm PDF card box (~220x220px at 0.68 quality yields crisp images under 8KB each)
+            const maxWidth = 220;
+            const maxHeight = 220;
 
             if (width > maxWidth) {
               height = Math.round((height * maxWidth) / width);
@@ -1049,7 +1081,7 @@ export default function App() {
             const ctx = canvas.getContext("2d");
             if (ctx) {
               ctx.drawImage(img, 0, 0, width, height);
-              const dataUrl = canvas.toDataURL("image/jpeg", 0.75); // 0.75 quality is perfectly clear for 42x25mm
+              const dataUrl = canvas.toDataURL("image/jpeg", 0.68); // 0.68 JPEG compression is razor sharp for print
               if (dataUrl && dataUrl.includes(",")) {
                 resolve({ base64: dataUrl.split(",")[1], width: originalWidth, height: originalHeight });
               } else {
@@ -1105,7 +1137,7 @@ export default function App() {
         // 1. Check if we already have a runtime resolved working URL for this product
         const resolvedUrl = typeof window !== "undefined" ? (window as any).__RESOLVED_IMAGES__?.[product.id] : null;
 
-        const candidateUrls: string[] = [];
+        const rawCandidateUrls: string[] = [];
         let isValidResolvedUrl = false;
         if (resolvedUrl) {
           const lowerUrl = resolvedUrl.toLowerCase();
@@ -1115,7 +1147,7 @@ export default function App() {
           const isFallbackMatch = fallbackUrls.some(f => f.toLowerCase() === lowerUrl);
           if (isLocalMatch || isFallbackMatch) {
             isValidResolvedUrl = true;
-            candidateUrls.push(resolvedUrl);
+            rawCandidateUrls.push(resolvedUrl);
           }
         }
 
@@ -1135,18 +1167,28 @@ export default function App() {
           
           for (const filename of possibleLocalFiles) {
             if (publicImageFiles.has(filename)) {
-              candidateUrls.push(`/${filename}`);
+              rawCandidateUrls.push(`/${filename}`);
             }
           }
           
           // Only use fallback external URLs if no local files matched (avoids 404s completely)
-          if (candidateUrls.length === 0) {
-            candidateUrls.push(...fallbackUrls);
+          if (rawCandidateUrls.length === 0) {
+            rawCandidateUrls.push(...fallbackUrls);
           }
         }
 
-        if (candidateUrls.length === 0) {
+        if (rawCandidateUrls.length === 0) {
           return null;
+        }
+
+        // Build candidate list prioritizing ultra-fast edge thumbnail URLs
+        const candidateUrls: string[] = [];
+        for (const rawUrl of rawCandidateUrls) {
+          const thumbUrl = getThumbnailUrl(rawUrl);
+          if (thumbUrl && thumbUrl !== rawUrl) {
+            candidateUrls.push(thumbUrl);
+          }
+          candidateUrls.push(rawUrl);
         }
 
         for (const url of candidateUrls) {
@@ -1161,7 +1203,7 @@ export default function App() {
                   const blob = await matched.blob();
                   const imgResult = await blobToBase64(blob);
                   if (imgResult.base64) {
-                    const format = url.toLowerCase().endsWith(".png") ? "PNG" : "JPEG";
+                    const format = "JPEG";
                     const resObj = { base64: imgResult.base64, format, width: imgResult.width, height: imgResult.height };
                     // Remember this URL as working!
                     if (typeof window !== "undefined") {
@@ -1184,7 +1226,7 @@ export default function App() {
                 const blob = await response.blob();
                 const imgResult = await blobToBase64(blob);
                 if (imgResult.base64) {
-                  const format = url.toLowerCase().endsWith(".png") ? "PNG" : "JPEG";
+                  const format = "JPEG";
                   const resObj = { base64: imgResult.base64, format, width: imgResult.width, height: imgResult.height };
                   // Remember this URL as working!
                   if (typeof window !== "undefined") {
@@ -1235,7 +1277,7 @@ export default function App() {
 
       // Parallel batch image resolver loop with real-time UI updates
       const processedProducts: { product: Product, imgData: string | null, format: string | null, width?: number, height?: number }[] = [];
-      const batchSize = 15;
+      const batchSize = 35;
       
       showToast(`正在產生商品目錄 PDF... (共 ${sortedProducts.length} 款商品)`);
       
@@ -2626,8 +2668,22 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Present Catalog button & Lock System Button */}
+              {/* Present Catalog button, Download Salestable button & Lock System Button */}
               <div className="flex items-center gap-2 sm:gap-3">
+                <button
+                  onClick={handleGenerateJsPdf}
+                  disabled={isGeneratingPdf}
+                  className="px-3.5 sm:px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-md shadow-indigo-100 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer disabled:opacity-60 shrink-0"
+                  title="下載 Salestable PDF 圖冊"
+                >
+                  {isGeneratingPdf ? (
+                    <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                  ) : (
+                    <Download className="w-4 h-4 text-white" />
+                  )}
+                  <span>{isGeneratingPdf ? "Generating..." : "Download Salestable"}</span>
+                </button>
+
                 <button
                   onClick={handleLogout}
                   className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
@@ -3068,6 +3124,22 @@ export default function App() {
                   <span className="hidden sm:inline">{syncing ? "同步中..." : "同步數據"}</span>
                 </button>
 
+                {/* Download Salestable PDF Button */}
+                <button
+                  onClick={handleGenerateJsPdf}
+                  disabled={isGeneratingPdf}
+                  className="px-3.5 sm:px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-md shadow-indigo-100 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shrink-0 disabled:opacity-60"
+                  title="下載 Salestable PDF 圖冊"
+                >
+                  {isGeneratingPdf ? (
+                    <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                  ) : (
+                    <Download className="w-4 h-4 text-white" />
+                  )}
+                  <span className="hidden sm:inline">{isGeneratingPdf ? "Generating..." : "Download Salestable"}</span>
+                  <span className="sm:hidden">Salestable</span>
+                </button>
+
                 {/* Back to Management dashboard */}
                 <button
                   onClick={() => setViewMode("admin")}
@@ -3405,14 +3477,14 @@ export default function App() {
                     <button
                       onClick={handleGenerateJsPdf}
                       disabled={isGeneratingPdf}
-                      className="w-full py-2 px-3 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="w-full py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[11px] font-extrabold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-60"
                     >
                       {isGeneratingPdf ? (
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-500" />
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
                       ) : (
-                        <ExternalLink className="w-3.5 h-3.5 text-indigo-500" />
+                        <Download className="w-3.5 h-3.5 text-white" />
                       )}
-                      <span>{isGeneratingPdf ? "正在產生 PDF..." : "下載帶書籤 PDF"}</span>
+                      <span>{isGeneratingPdf ? "正在產生 PDF..." : "Download Salestable"}</span>
                     </button>
                   </div>
                 </div>
