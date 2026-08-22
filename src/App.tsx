@@ -461,13 +461,15 @@ export default function App() {
     categoryOrder?: { symbol: string; name: string }[];
     highlightCategories?: string[];
     brands?: string[];
+    sectionsOrder?: { type: "brand" | "categories" | "category"; symbol: string; name: string }[];
   }>({
     symbolToName: {},
     productIdToSymbol: {},
     productIdToCostName: {},
     categoryOrder: [],
     highlightCategories: [],
-    brands: []
+    brands: [],
+    sectionsOrder: []
   });
   const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState<boolean>(false);
   const [isStockDropdownOpen, setIsStockDropdownOpen] = useState<boolean>(false);
@@ -507,14 +509,14 @@ export default function App() {
   const [isPreviewingPdfPrint, setIsPreviewingPdfPrint] = useState<boolean>(false);
   const [publicImageFiles, setPublicImageFiles] = useState<Set<string>>(new Set());
 
-  // Helper function to build ordered catalog products with top duplicated highlight categories & sequence
+  // Helper function to build ordered catalog products following the exact sequence of Col E & F in Cost tab
   const buildOrderedCatalogProducts = (
     prods: Product[],
     cCat: typeof costCategories
   ) => {
     const groups: Record<string, Product[]> = {};
 
-    // Filter products for PDF catalog: disregard Cost tab rules, only show products not marked as 'N' in Col AE ('show on pdf') of 'raw' tab
+    // Filter products for PDF catalog: only show products not marked as 'N' in Col AE ('show on pdf') of 'raw' tab
     const pdfProducts = prods.filter(p => {
       const showPdfVal = (
         p.extraAttributes?.["show on pdf"] ||
@@ -525,38 +527,86 @@ export default function App() {
       return showPdfVal !== "N";
     });
 
-    const highlightCats = (cCat.highlightCategories && cCat.highlightCategories.length > 0)
-      ? cCat.highlightCategories
-      : ["新貨", "清貨", "季度熱賣"];
+    const sectionsOrder = (cCat.sectionsOrder && cCat.sectionsOrder.length > 0)
+      ? cCat.sectionsOrder
+      : [
+          ...(cCat.brands || []).map(b => ({ type: "brand" as const, symbol: "Brand", name: b })),
+          ...(cCat.highlightCategories || []).map(h => ({ type: "categories" as const, symbol: "Categories", name: h })),
+          ...(cCat.categoryOrder || []).map(c => ({ type: "category" as const, symbol: c.symbol, name: c.name }))
+        ];
 
-    const catOrder = (cCat.categoryOrder && cCat.categoryOrder.length > 0)
-      ? cCat.categoryOrder.map(c => c.name)
-      : [];
-
-    // 1. Top Section: Highlight Categories (Duplicated products matching Col M 'Categories')
-    highlightCats.forEach(hCat => {
-      const matching = pdfProducts.filter(p => {
-        const catField = (p.extraAttributes && (p.extraAttributes["Categories"] || p.extraAttributes["Categories/分類"])) || (p.allValues ? p.allValues[12] : "") || "";
-        if (!catField) return false;
-        return catField.includes(hCat);
-      });
-
-      if (matching.length > 0) {
-        const sortedMatching = [...matching].sort((a, b) => {
-          const nameA = a.costName || a.name || "";
-          const nameB = b.costName || b.name || "";
-          return nameA.localeCompare(nameB, "zh-HK");
+    // Process each section in the exact sequence of Col E & F of Cost tab
+    sectionsOrder.forEach(sec => {
+      if (sec.type === "brand") {
+        const brandLower = sec.name.trim().toLowerCase();
+        if (!brandLower) return;
+        const matching = pdfProducts.filter(p => {
+          const pName = (p.costName || p.name || "").toLowerCase();
+          return pName.includes(brandLower);
         });
 
-        groups[hCat] = sortedMatching.map(p => ({
-          ...p,
-          costCategoryName: hCat
-        }));
+        if (matching.length > 0) {
+          const sortedMatching = [...matching].sort((a, b) => {
+            const nameA = a.costName || a.name || "";
+            const nameB = b.costName || b.name || "";
+            return nameA.localeCompare(nameB, "zh-HK");
+          });
+
+          groups[sec.name] = sortedMatching.map(p => ({
+            ...p,
+            costCategoryName: sec.name
+          }));
+        }
+      } else if (sec.type === "categories") {
+        const catLower = sec.name.trim().toLowerCase();
+        if (!catLower) return;
+        const matching = pdfProducts.filter(p => {
+          const catField = (p.extraAttributes && (p.extraAttributes["Categories"] || p.extraAttributes["Categories/分類"])) || (p.allValues ? p.allValues[12] : "") || "";
+          if (!catField) return false;
+          return catField.toLowerCase().includes(catLower);
+        });
+
+        if (matching.length > 0) {
+          const sortedMatching = [...matching].sort((a, b) => {
+            const nameA = a.costName || a.name || "";
+            const nameB = b.costName || b.name || "";
+            return nameA.localeCompare(nameB, "zh-HK");
+          });
+
+          groups[sec.name] = sortedMatching.map(p => ({
+            ...p,
+            costCategoryName: sec.name
+          }));
+        }
+      } else if (sec.type === "category") {
+        const catName = sec.name.trim();
+        if (!catName) return;
+        const matching = pdfProducts.filter(p => {
+          const pCat = p.costCategoryName?.trim();
+          if (pCat === catName) return true;
+          if (p.costCategorySymbol && p.costCategorySymbol === sec.symbol) return true;
+          return false;
+        });
+
+        if (matching.length > 0) {
+          const sortedMatching = [...matching].sort((a, b) => {
+            const nameA = a.costName || a.name || "";
+            const nameB = b.costName || b.name || "";
+            return nameA.localeCompare(nameB, "zh-HK");
+          });
+
+          groups[catName] = sortedMatching.map(p => ({
+            ...p,
+            costCategoryName: catName
+          }));
+        }
       }
     });
 
-    // 2. Main Section: Remaining categories ordered by sequence in Col E of Cost tab
-    const mainGroups: Record<string, Product[]> = {};
+    // Fallback: any remaining products in categories not covered in sectionsOrder
+    const existingGroupNames = new Set(Object.keys(groups));
+    const unassignedGroups: Record<string, Product[]> = {};
+
     pdfProducts.forEach(p => {
       let cat = p.costCategoryName?.trim() || "";
       if (!cat) {
@@ -569,38 +619,23 @@ export default function App() {
           cat = "其他分類";
         }
       }
-      if (!mainGroups[cat]) {
-        mainGroups[cat] = [];
+      if (!existingGroupNames.has(cat)) {
+        if (!unassignedGroups[cat]) {
+          unassignedGroups[cat] = [];
+        }
+        unassignedGroups[cat].push(p);
       }
-      mainGroups[cat].push(p);
     });
 
-    Object.keys(mainGroups).forEach(cat => {
-      mainGroups[cat].sort((a, b) => {
+    Object.keys(unassignedGroups).forEach(cat => {
+      unassignedGroups[cat].sort((a, b) => {
         const nameA = a.costName || a.name || "";
         const nameB = b.costName || b.name || "";
         return nameA.localeCompare(nameB, "zh-HK");
       });
-    });
-
-    const orderedCatNames: string[] = [];
-
-    catOrder.forEach(catName => {
-      if (mainGroups[catName] && !orderedCatNames.includes(catName)) {
-        orderedCatNames.push(catName);
-      }
-    });
-
-    Object.keys(mainGroups).forEach(catName => {
-      if (!orderedCatNames.includes(catName)) {
-        orderedCatNames.push(catName);
-      }
-    });
-
-    orderedCatNames.forEach(catName => {
-      groups[catName] = mainGroups[catName].map(p => ({
+      groups[cat] = unassignedGroups[cat].map(p => ({
         ...p,
-        costCategoryName: catName
+        costCategoryName: cat
       }));
     });
 
@@ -1345,13 +1380,16 @@ export default function App() {
         ? costCategories.highlightCategories
         : ["新貨", "清貨", "季度熱賣"];
 
+      const brandList = costCategories.brands || [];
+
       activeCategories.forEach((catName) => {
         const catItems = categoryMap[catName];
         if (!catItems || catItems.length === 0) return;
 
         const isHighlightCat = highlightCats.includes(catName);
+        const isBrandSection = brandList.includes(catName);
 
-        // Group catItems into brand sub-groups based on Col G brand words (skip for Categories under Col E of Cost tab like '新貨', '清貨')
+        // Group catItems into brand sub-groups based on Col G brand words (skip for brand sections and highlight categories)
         interface BrandSubGroup {
           brandName?: string;
           items: typeof catItems;
@@ -1360,7 +1398,7 @@ export default function App() {
         const brandSubGroups: BrandSubGroup[] = [];
         let unassignedItems = [...catItems];
 
-        if (!isHighlightCat && brandWords.length > 0) {
+        if (!isHighlightCat && !isBrandSection && brandWords.length > 0) {
           brandWords.forEach(brand => {
             const brandTrimmed = brand.trim();
             const brandLower = brandTrimmed.toLowerCase();

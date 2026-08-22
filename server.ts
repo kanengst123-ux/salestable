@@ -244,6 +244,7 @@ let costCategoriesCache: {
   categoryOrder: { symbol: string; name: string }[];
   highlightCategories: string[];
   brands: string[];
+  sectionsOrder: { type: "brand" | "categories" | "category"; symbol: string; name: string }[];
 } | null = null;
 let lastCostFetchTime = 0;
 
@@ -268,6 +269,7 @@ async function fetchCostCategories() {
     const categoryOrder: { symbol: string; name: string }[] = [];
     const highlightCategories: string[] = [];
     const brands: string[] = [];
+    const sectionsOrder: { type: "brand" | "categories" | "category"; symbol: string; name: string }[] = [];
     const seenSymbols = new Set<string>();
 
     for (let i = 1; i < rows.length; i++) {
@@ -289,19 +291,28 @@ async function fetchCostCategories() {
       const mapName = (row[5] || "").replace(/\r/g, "").trim();
 
       if (mapSymbol && mapName) {
-        if (mapSymbol.toUpperCase() === "CATEGORIES") {
+        const upperSymbol = mapSymbol.toUpperCase();
+        if (upperSymbol === "BRAND") {
+          if (!brands.includes(mapName)) {
+            brands.push(mapName);
+          }
+          sectionsOrder.push({ type: "brand", symbol: mapSymbol, name: mapName });
+        } else if (upperSymbol === "CATEGORIES") {
           if (!highlightCategories.includes(mapName)) {
             highlightCategories.push(mapName);
           }
+          sectionsOrder.push({ type: "categories", symbol: mapSymbol, name: mapName });
         } else {
           symbolToName[mapSymbol] = mapName;
           if (!seenSymbols.has(mapSymbol)) {
             seenSymbols.add(mapSymbol);
             categoryOrder.push({ symbol: mapSymbol, name: mapName });
           }
+          sectionsOrder.push({ type: "category", symbol: mapSymbol, name: mapName });
         }
       }
 
+      // Backward compatibility if Col G still has any brand words
       if (row.length > 6) {
         const brandWord = (row[6] || "").replace(/\r/g, "").trim();
         if (
@@ -321,7 +332,8 @@ async function fetchCostCategories() {
       productIdToCostName,
       categoryOrder,
       highlightCategories,
-      brands
+      brands,
+      sectionsOrder
     };
     lastCostFetchTime = now;
 
@@ -346,7 +358,7 @@ async function fetchCostCategories() {
     } catch (backupError) {
       console.error("No valid cost categories backup found:", backupError);
     }
-    return { symbolToName: {}, productIdToSymbol: {}, productIdToCostName: {}, categoryOrder: [], highlightCategories: [], brands: [] };
+    return { symbolToName: {}, productIdToSymbol: {}, productIdToCostName: {}, categoryOrder: [], highlightCategories: [], brands: [], sectionsOrder: [] };
   }
 }
 
@@ -867,7 +879,8 @@ app.get("/api/products", async (req, res) => {
       productIdToCostName: {},
       categoryOrder: [],
       highlightCategories: [],
-      brands: []
+      brands: [],
+      sectionsOrder: []
     };
     try {
       costCategories = await fetchCostCategories();
