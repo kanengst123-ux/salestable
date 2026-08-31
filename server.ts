@@ -120,6 +120,86 @@ function parseCSV(csvText: string): string[][] {
   return lines;
 }
 
+// Sheet15 Image URL mapping and background sync helper
+let sheet15ImageMapCache: Map<string, string> | null = null;
+let lastSheet15FetchTime = 0;
+
+async function getSheet15ImageMap(): Promise<Map<string, string>> {
+  const now = Date.now();
+  if (sheet15ImageMapCache && (now - lastSheet15FetchTime) < CACHE_DURATION) {
+    return sheet15ImageMapCache;
+  }
+
+  const url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=1813720414";
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const csv = await res.text();
+    const rows = parseCSV(csv);
+    const map = new Map<string, string>();
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row[0]) continue;
+      const prodId = row[0].trim();
+      const showPdf = (row[1] || "").trim().toUpperCase();
+      const imgUrls = (row[3] || "").trim();
+      if (imgUrls && showPdf !== "N") {
+        const cleanId = prodId.startsWith("id-") ? prodId : `id-${prodId}`;
+        const urls = imgUrls.split(/[|\n]/).map(u => u.trim()).filter(u => u.startsWith("http"));
+        if (urls.length > 0) {
+          map.set(cleanId.toLowerCase(), urls[0]);
+          const rawNoPrefix = cleanId.replace(/^id-/, "");
+          map.set(rawNoPrefix.toLowerCase(), urls[0]);
+        }
+      }
+    }
+    sheet15ImageMapCache = map;
+    lastSheet15FetchTime = now;
+    return map;
+  } catch (err: any) {
+    console.error("Failed to fetch Sheet15 image map:", err.message);
+    return sheet15ImageMapCache || new Map();
+  }
+}
+
+async function syncSheet15Images() {
+  try {
+    const map = await getSheet15ImageMap();
+    const publicDir = path.join(process.cwd(), "public");
+    if (!fs.existsSync(publicDir)) {
+      fs.mkdirSync(publicDir, { recursive: true });
+    }
+
+    const files = new Set(fs.readdirSync(publicDir));
+    let downloaded = 0;
+
+    for (const [key, imgUrl] of map.entries()) {
+      if (!key.startsWith("id-")) continue;
+      const filename = `${key}.jpg`;
+      if (!files.has(filename)) {
+        try {
+          const res = await fetch(imgUrl);
+          if (res.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            if (buf.length > 0) {
+              fs.writeFileSync(path.join(publicDir, filename), buf);
+              files.add(filename);
+              downloaded++;
+            }
+          }
+        } catch (downloadErr) {
+          // ignore individual download errors
+        }
+      }
+    }
+    if (downloaded > 0) {
+      console.log(`[Sheet15 Sync] Successfully auto-downloaded ${downloaded} new images into public/`);
+    }
+  } catch (e: any) {
+    console.error("[Sheet15 Sync] Error syncing Sheet15 images:", e.message);
+  }
+}
+
 // Memory cache for products to prevent rate-limiting or loading delay
 let productsCache: any[] = [];
 let lastFetchTime = 0;
@@ -147,6 +227,9 @@ async function fetchProductsFromSheet() {
     const headers = rows[0];
     const dataRows = rows.slice(1);
 
+    // Fetch sheet15 image mappings to enrich product attributes
+    const sheet15Map = await getSheet15ImageMap().catch(() => new Map<string, string>());
+
     // Map rows to clean Product representations
     const rawProducts = dataRows.map((row, index) => {
       const prodId = row[1] || `PROD-${index + 1}`;
@@ -173,6 +256,17 @@ async function fetchProductsFromSheet() {
           extraAttributes[header] = row[colIndex] || "";
         }
       });
+
+      // Enrich Image URLs from Sheet15 if available
+      const cleanLookup = prodId.toLowerCase().replace(/^id-/, "");
+      const s15Url = sheet15Map.get(prodId.toLowerCase()) || 
+                     sheet15Map.get(`id-${cleanLookup}`) || 
+                     sheet15Map.get(cleanLookup);
+      if (s15Url) {
+        if (!extraAttributes["Image URLs"]) {
+          extraAttributes["Image URLs"] = s15Url;
+        }
+      }
 
       return {
         id: prodId,
@@ -421,86 +515,6 @@ async function fetchPromoCategories() {
   }
 }
 
-// Sheet15 Image URL mapping and background sync helper
-let sheet15ImageMapCache: Map<string, string> | null = null;
-let lastSheet15FetchTime = 0;
-
-async function getSheet15ImageMap(): Promise<Map<string, string>> {
-  const now = Date.now();
-  if (sheet15ImageMapCache && (now - lastSheet15FetchTime) < CACHE_DURATION) {
-    return sheet15ImageMapCache;
-  }
-
-  const url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=1813720414";
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const csv = await res.text();
-    const rows = parseCSV(csv);
-    const map = new Map<string, string>();
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      if (!row || !row[0]) continue;
-      const prodId = row[0].trim();
-      const showPdf = (row[1] || "").trim().toUpperCase();
-      const imgUrls = (row[3] || "").trim();
-      if (imgUrls && showPdf !== "N") {
-        const cleanId = prodId.startsWith("id-") ? prodId : `id-${prodId}`;
-        const urls = imgUrls.split(/[|\n]/).map(u => u.trim()).filter(u => u.startsWith("http"));
-        if (urls.length > 0) {
-          map.set(cleanId.toLowerCase(), urls[0]);
-          const rawNoPrefix = cleanId.replace(/^id-/, "");
-          map.set(rawNoPrefix.toLowerCase(), urls[0]);
-        }
-      }
-    }
-    sheet15ImageMapCache = map;
-    lastSheet15FetchTime = now;
-    return map;
-  } catch (err: any) {
-    console.error("Failed to fetch Sheet15 image map:", err.message);
-    return sheet15ImageMapCache || new Map();
-  }
-}
-
-async function syncSheet15Images() {
-  try {
-    const map = await getSheet15ImageMap();
-    const publicDir = path.join(process.cwd(), "public");
-    if (!fs.existsSync(publicDir)) {
-      fs.mkdirSync(publicDir, { recursive: true });
-    }
-
-    const files = new Set(fs.readdirSync(publicDir));
-    let downloaded = 0;
-
-    for (const [key, imgUrl] of map.entries()) {
-      if (!key.startsWith("id-")) continue;
-      const filename = `${key}.jpg`;
-      if (!files.has(filename)) {
-        try {
-          const res = await fetch(imgUrl);
-          if (res.ok) {
-            const buf = Buffer.from(await res.arrayBuffer());
-            if (buf.length > 0) {
-              fs.writeFileSync(path.join(publicDir, filename), buf);
-              files.add(filename);
-              downloaded++;
-            }
-          }
-        } catch (downloadErr) {
-          // ignore individual download errors
-        }
-      }
-    }
-    if (downloaded > 0) {
-      console.log(`[Sheet15 Sync] Successfully auto-downloaded ${downloaded} new images into public/`);
-    }
-  } catch (e: any) {
-    console.error("[Sheet15 Sync] Error syncing Sheet15 images:", e.message);
-  }
-}
-
 // Local products persistence helpers
 const LOCAL_PRODUCTS_FILE = path.join(process.cwd(), "local_products.json");
 
@@ -592,17 +606,47 @@ app.post("/api/sheet-settings", (req, res) => {
   }
 });
 
-app.get("/api/public-images", (req, res) => {
+app.get("/api/public-images", async (req, res) => {
   try {
     const publicDir = path.join(process.cwd(), "public");
+    const fileSet = new Set<string>();
     if (fs.existsSync(publicDir)) {
       const files = fs.readdirSync(publicDir);
-      res.json({ files });
-    } else {
-      res.json({ files: [] });
+      files.forEach(f => fileSet.add(f));
     }
+    // Also include mapped Sheet15 product IDs so the frontend knows an image is ready to render/fetch
+    try {
+      const map = await getSheet15ImageMap();
+      for (const key of map.keys()) {
+        if (key.startsWith("id-")) {
+          fileSet.add(`${key}.jpg`);
+        }
+      }
+    } catch (e) {}
+
+    res.json({ files: Array.from(fileSet) });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to list public images" });
+  }
+});
+
+app.get("/api/image-proxy", async (req, res) => {
+  try {
+    const url = req.query.url as string;
+    if (!url || !url.startsWith("http")) {
+      return res.status(400).send("Invalid URL");
+    }
+    const response = await fetch(url);
+    if (!response.ok) {
+      return res.status(response.status).send("Failed to fetch image");
+    }
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "public, max-age=31536000");
+    const arrayBuffer = await response.arrayBuffer();
+    return res.send(Buffer.from(arrayBuffer));
+  } catch (err: any) {
+    return res.status(500).send(err.message || "Proxy error");
   }
 });
 
