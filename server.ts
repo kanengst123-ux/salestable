@@ -203,7 +203,7 @@ async function syncSheet15Images() {
 // Memory cache for products to prevent rate-limiting or loading delay
 let productsCache: any[] = [];
 let lastFetchTime = 0;
-const CACHE_DURATION = 60 * 1000; // 60 seconds
+const CACHE_DURATION = 15 * 60 * 1000; // 15 minutes (900 seconds)
 
 async function fetchProductsFromSheet() {
   const now = Date.now();
@@ -920,7 +920,7 @@ app.put("/api/products/:id", (req, res) => {
 
 let soldDataCache: Record<string, number> | null = null;
 let lastSoldFetchTime = 0;
-const SOLD_CACHE_DURATION = 60 * 1000; // 60 seconds
+const SOLD_CACHE_DURATION = 15 * 60 * 1000; // 15 minutes (900 seconds)
 
 async function fetchSoldDataFromSheet() {
   const now = Date.now();
