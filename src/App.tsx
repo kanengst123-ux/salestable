@@ -972,28 +972,13 @@ export default function App() {
       try {
         let fontUrl = "https://fonts.gstatic.com/s/notosanstc/v39/-nFuOG829Oofr2wohFbTp9ifNAn722rq0MXz76Cy_Co.ttf";
         
-        try {
-          const cssRes = await fetch("https://fonts.googleapis.com/css2?family=Noto+Sans+TC");
-          if (cssRes.ok) {
-            const cssText = await cssRes.text();
-            const match = cssText.match(/url\((https:\/\/fonts\.gstatic\.com\/[^\)]+\.ttf)\)/);
-            if (match && match[1]) {
-              fontUrl = match[1];
-              console.log("Dynamically resolved Noto Sans TC TTF URL:", fontUrl);
-            }
-          }
-        } catch (cssErr) {
-          console.warn("Could not dynamically resolve latest Noto Sans TC from Google CSS API, falling back to static gstatic URL:", cssErr);
-        }
-        
-        let res;
+        let res: Response | null = null;
         if (typeof window !== "undefined" && "caches" in window) {
           try {
             const cache = await caches.open("product-images-v1");
             const matched = await cache.match(fontUrl);
             if (matched) {
               res = matched;
-              console.log("NotoSansTC font loaded from browser Cache Storage.");
             }
           } catch (cacheErr) {
             console.warn("Error reading font from cache:", cacheErr);
@@ -1001,15 +986,22 @@ export default function App() {
         }
 
         if (!res) {
-          res = await fetch(fontUrl);
-          if (res.ok && typeof window !== "undefined" && "caches" in window) {
-            try {
-              const cache = await caches.open("product-images-v1");
-              await cache.put(fontUrl, res.clone());
-              console.log("NotoSansTC font saved to browser Cache Storage.");
-            } catch (cacheErr) {
-              console.warn("Error saving font to cache:", cacheErr);
+          const controller = new AbortController();
+          const fontTimeout = setTimeout(() => controller.abort(), 3000);
+          try {
+            const fetchRes = await fetch(fontUrl, { signal: controller.signal });
+            clearTimeout(fontTimeout);
+            if (fetchRes.ok) {
+              res = fetchRes;
+              if (typeof window !== "undefined" && "caches" in window) {
+                try {
+                  const cache = await caches.open("product-images-v1");
+                  await cache.put(fontUrl, res.clone());
+                } catch (cacheErr) {}
+              }
             }
+          } catch (e) {
+            clearTimeout(fontTimeout);
           }
         }
 
@@ -1017,7 +1009,7 @@ export default function App() {
           const buffer = await res.arrayBuffer();
           const bytes = new Uint8Array(buffer);
           let binary = "";
-          const chunk = 0xffff; // 64k chunks for high performance converting without stack overflow
+          const chunk = 0xffff;
           for (let i = 0; i < bytes.length; i += chunk) {
             binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk) as any);
           }
@@ -1027,10 +1019,9 @@ export default function App() {
           doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "normal");
           doc.setFont("NotoSansTC");
           fontAdded = true;
-          console.log("Full NotoSansTC font loaded inside jsPDF successfully.");
         }
       } catch (err) {
-        console.warn("Could not fetch complete Chinese font, using Helvetica fallback", err);
+        console.warn("Using canvas text rendering fallback:", err);
       }
 
       if (!fontAdded) {
@@ -1074,16 +1065,21 @@ export default function App() {
         return new Promise((resolve) => {
           const img = new Image();
           const url = URL.createObjectURL(blob);
-          img.onload = () => {
+          const cleanupTimer = setTimeout(() => {
             URL.revokeObjectURL(url);
-            const originalWidth = img.width || 250;
-            const originalHeight = img.height || 180;
+            resolve({ base64: "", width: 220, height: 220 });
+          }, 3000);
+
+          img.onload = () => {
+            clearTimeout(cleanupTimer);
+            URL.revokeObjectURL(url);
+            const originalWidth = img.width || 220;
+            const originalHeight = img.height || 220;
             let width = img.width;
             let height = img.height;
 
-            // Target dimensions for 44.5x51.5mm PDF card box (~220x220px at 0.68 quality yields crisp images under 8KB each)
-            const maxWidth = 220;
-            const maxHeight = 220;
+            const maxWidth = 180;
+            const maxHeight = 180;
 
             if (width > maxWidth) {
               height = Math.round((height * maxWidth) / width);
@@ -1100,47 +1096,41 @@ export default function App() {
             const ctx = canvas.getContext("2d");
             if (ctx) {
               ctx.drawImage(img, 0, 0, width, height);
-              const dataUrl = canvas.toDataURL("image/jpeg", 0.68); // 0.68 JPEG compression is razor sharp for print
+              const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
               if (dataUrl && dataUrl.includes(",")) {
                 resolve({ base64: dataUrl.split(",")[1], width: originalWidth, height: originalHeight });
               } else {
                 resolve({ base64: "", width: originalWidth, height: originalHeight });
               }
             } else {
-              // fallback if canvas context fails
-              const reader = new FileReader();
-              reader.onloadend = () => {
-                const result = reader.result as string;
-                resolve({
-                  base64: result && result.includes(",") ? result.split(",")[1] : "",
-                  width: originalWidth,
-                  height: originalHeight
-                });
-              };
-              reader.readAsDataURL(blob);
+              resolve({ base64: "", width: originalWidth, height: originalHeight });
             }
           };
           img.onerror = () => {
+            clearTimeout(cleanupTimer);
             URL.revokeObjectURL(url);
-            // fallback if image loading fails
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              const result = reader.result as string;
-              resolve({
-                base64: result && result.includes(",") ? result.split(",")[1] : "",
-                width: 42,
-                height: 25
-              });
-            };
-            reader.readAsDataURL(blob);
+            resolve({ base64: "", width: 220, height: 220 });
           };
           img.src = url;
         });
       };
 
+      // Fast fetch with strict 1500ms timeout per candidate
+      const fetchWithTimeout = async (url: string, timeoutMs = 1500): Promise<Response | null> => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const res = await fetch(url, { signal: controller.signal });
+          clearTimeout(timer);
+          return res;
+        } catch (e) {
+          clearTimeout(timer);
+          return null;
+        }
+      };
+
       // Helper to resolve product image from browser cache or fallback URL
       const getProductImageBase64 = async (product: Product): Promise<{ base64: string, format: string, width: number, height: number } | null> => {
-        // Check memory cache first to instantly bypass network/cache hits if resolved before
         if (typeof window !== "undefined") {
           (window as any).__RESOLVED_BASE64_CACHE__ = (window as any).__RESOLVED_BASE64_CACHE__ || {};
           const cached = (window as any).__RESOLVED_BASE64_CACHE__[product.id];
@@ -1171,7 +1161,6 @@ export default function App() {
         }
 
         if (!isValidResolvedUrl) {
-          // Check all possible flat local image patterns against the public folder file listing Set
           const possibleLocalFiles = [
             `id-${cleanId}.jpg`,
             `id-${cleanId}.jpeg`,
@@ -1190,7 +1179,6 @@ export default function App() {
             }
           }
           
-          // Only use fallback external URLs if no local files matched (avoids 404s completely)
           if (rawCandidateUrls.length === 0) {
             rawCandidateUrls.push(...fallbackUrls);
           }
@@ -1200,7 +1188,7 @@ export default function App() {
           return null;
         }
 
-        // Build candidate list prioritizing ultra-fast edge thumbnail URLs
+        // Build candidate list prioritizing fast thumbnail URLs
         const candidateUrls: string[] = [];
         for (const rawUrl of rawCandidateUrls) {
           const thumbUrl = getThumbnailUrl(rawUrl);
@@ -1212,42 +1200,40 @@ export default function App() {
 
         for (const url of candidateUrls) {
           try {
-            // A. Try Cache API first (extremely fast and fully offline)
+            // A. Try Cache API first (extremely fast and offline)
             if (typeof window !== "undefined" && "caches" in window) {
-              const cache = await caches.open("product-images-v1");
-              const matched = await cache.match(url, { ignoreSearch: true });
-              if (matched) {
-                const contentType = matched.headers.get("content-type");
-                if (!contentType || !contentType.includes("text/html")) {
-                  const blob = await matched.blob();
-                  const imgResult = await blobToBase64(blob);
-                  if (imgResult.base64) {
-                    const format = "JPEG";
-                    const resObj = { base64: imgResult.base64, format, width: imgResult.width, height: imgResult.height };
-                    // Remember this URL as working!
-                    if (typeof window !== "undefined") {
-                      (window as any).__RESOLVED_IMAGES__ = (window as any).__RESOLVED_IMAGES__ || {};
-                      (window as any).__RESOLVED_IMAGES__[product.id] = url;
-                      (window as any).__RESOLVED_BASE64_CACHE__ = (window as any).__RESOLVED_BASE64_CACHE__ || {};
-                      (window as any).__RESOLVED_BASE64_CACHE__[product.id] = resObj;
+              try {
+                const cache = await caches.open("product-images-v1");
+                const matched = await cache.match(url, { ignoreSearch: true });
+                if (matched) {
+                  const contentType = matched.headers.get("content-type");
+                  if (!contentType || !contentType.includes("text/html")) {
+                    const blob = await matched.blob();
+                    const imgResult = await blobToBase64(blob);
+                    if (imgResult.base64) {
+                      const resObj = { base64: imgResult.base64, format: "JPEG", width: imgResult.width, height: imgResult.height };
+                      if (typeof window !== "undefined") {
+                        (window as any).__RESOLVED_IMAGES__ = (window as any).__RESOLVED_IMAGES__ || {};
+                        (window as any).__RESOLVED_IMAGES__[product.id] = url;
+                        (window as any).__RESOLVED_BASE64_CACHE__ = (window as any).__RESOLVED_BASE64_CACHE__ || {};
+                        (window as any).__RESOLVED_BASE64_CACHE__[product.id] = resObj;
+                      }
+                      return resObj;
                     }
-                    return resObj;
                   }
                 }
-              }
+              } catch (cacheE) {}
             }
 
-            // B. Try fetching directly
-            const response = await fetch(url);
-            if (response.ok) {
+            // B. Try fetching directly with timeout
+            const response = await fetchWithTimeout(url, 1500);
+            if (response && response.ok) {
               const contentType = response.headers.get("content-type");
               if (!contentType || !contentType.includes("text/html")) {
                 const blob = await response.blob();
                 const imgResult = await blobToBase64(blob);
                 if (imgResult.base64) {
-                  const format = "JPEG";
-                  const resObj = { base64: imgResult.base64, format, width: imgResult.width, height: imgResult.height };
-                  // Remember this URL as working!
+                  const resObj = { base64: imgResult.base64, format: "JPEG", width: imgResult.width, height: imgResult.height };
                   if (typeof window !== "undefined") {
                     (window as any).__RESOLVED_IMAGES__ = (window as any).__RESOLVED_IMAGES__ || {};
                     (window as any).__RESOLVED_IMAGES__[product.id] = url;
@@ -1296,13 +1282,13 @@ export default function App() {
 
       // Parallel batch image resolver loop with real-time UI updates
       const processedProducts: { product: Product, imgData: string | null, format: string | null, width?: number, height?: number }[] = [];
-      const batchSize = 35;
+      const batchSize = 60;
       
       showToast(`正在產生商品目錄 PDF... (共 ${sortedProducts.length} 款商品)`);
       
       for (let i = 0; i < sortedProducts.length; i += batchSize) {
         const batch = sortedProducts.slice(i, i + batchSize);
-        showToast(`正在下載並處理商品圖片 (${Math.min(i + batchSize, sortedProducts.length)}/${sortedProducts.length})...`);
+        showToast(`正在處理商品圖片 (${Math.min(i + batchSize, sortedProducts.length)}/${sortedProducts.length})...`);
         
         const results = await Promise.all(
           batch.map(async (p) => {
@@ -1672,7 +1658,26 @@ export default function App() {
       }
 
       const dateStr = new Date().toISOString().slice(0, 10);
-      doc.save(`Product_Catalog_Price_Tier_${selectedPriceTier}_${dateStr}.pdf`);
+      const filename = `Product_Catalog_Price_Tier_${selectedPriceTier}_${dateStr}.pdf`;
+
+      // Cross-platform universal Blob download (compatible with Android Chrome, Windows PC, iOS Safari)
+      try {
+        const pdfBlob = doc.output("blob");
+        const blobUrl = URL.createObjectURL(pdfBlob);
+        const link = document.createElement("a");
+        link.href = blobUrl;
+        link.download = filename;
+        link.style.display = "none";
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(blobUrl);
+        }, 1000);
+      } catch (saveErr) {
+        doc.save(filename);
+      }
+
       showToast("PDF 商品目錄導出成功！");
     } catch (error) {
       console.error("PDF export failed:", error);
