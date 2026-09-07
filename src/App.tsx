@@ -903,14 +903,14 @@ export default function App() {
       const ctx = canvas.getContext("2d");
       if (!ctx) return { dataUrl: "", widthMm: 0, heightMm: 0 };
 
-      const fontSize = 26;
-      const lineHeight = 32;
+      const fontSize = 32;
+      const lineHeight = 38;
       ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", sans-serif`;
 
       const chars = text.split("");
       let line1 = "";
       let line2 = "";
-      const targetPixelWidth = 320; // High resolution pixel width for 44.5mm box
+      const targetPixelWidth = 350; // High resolution pixel width for 44.5mm box
 
       for (let i = 0; i < chars.length; i++) {
         const testLine = line1 + chars[i];
@@ -925,7 +925,7 @@ export default function App() {
       if (line2) {
         let testLine2 = "";
         for (let i = 0; i < line2.length; i++) {
-          if (ctx.measureText(testLine2 + line2[i]).width > targetPixelWidth - 25) {
+          if (ctx.measureText(testLine2 + line2[i]).width > targetPixelWidth - 30) {
             testLine2 += "...";
             break;
           }
@@ -949,7 +949,7 @@ export default function App() {
         ctx.fillText(line2, 0, lineHeight + 2);
       }
 
-      const heightMm = numLines * 3.6;
+      const heightMm = numLines * 4.0;
       return { dataUrl: canvas.toDataURL("image/png"), widthMm: maxWidthMm, heightMm };
     } catch (e) {
       return { dataUrl: "", widthMm: 0, heightMm: 0 };
@@ -1477,22 +1477,13 @@ export default function App() {
               const p = item.product;
               const isOutOfStock = !p.hasStock;
 
-              // 1. Card Frame
-              const hasCategoryLabel = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].trim() !== "";
+              // 1. Card Frame (No Border)
               if (isOutOfStock) {
-                doc.setDrawColor(203, 213, 225); // muted slate-300 border
-                doc.setLineWidth(0.35);
                 doc.setFillColor(248, 250, 252); // light slate-50 card body
-              } else if (hasCategoryLabel) {
-                doc.setDrawColor(212, 175, 55); // Gold border color
-                doc.setLineWidth(0.75); // thicker gold border
-                doc.setFillColor(255, 255, 255); // white card body
               } else {
-                doc.setDrawColor(28, 49, 115); // brand navy border
-                doc.setLineWidth(0.35);
                 doc.setFillColor(255, 255, 255); // white card body
               }
-              doc.roundedRect(cx, cy, cardW, cardH, 2, 2, "FD");
+              doc.roundedRect(cx, cy, cardW, cardH, 2, 2, "F");
 
               // 2. Image inside Card
               const pad = 1.2;
@@ -1540,25 +1531,16 @@ export default function App() {
                       doc.setFillColor(241, 245, 249);
                     }
                   }
-
-                  // Draw thin border over the image
-                  doc.setDrawColor(226, 232, 240);
-                  doc.setLineWidth(0.15);
-                  doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "S");
                 } catch (imgErr) {
                   doc.setFillColor(248, 250, 252);
-                  doc.setDrawColor(226, 232, 240);
-                  doc.setLineWidth(0.2);
-                  doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "FD");
+                  doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "F");
                   doc.setTextColor(148, 163, 184);
                   doc.setFontSize(8);
                   doc.text("[ 圖片載入失敗 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
                 }
               } else {
                 doc.setFillColor(248, 250, 252);
-                doc.setDrawColor(226, 232, 240);
-                doc.setLineWidth(0.2);
-                doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "FD");
+                doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "F");
                 doc.setTextColor(148, 163, 184);
                 doc.setFontSize(8);
                 doc.text("[ 暫無圖片 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
@@ -1571,47 +1553,42 @@ export default function App() {
                 doc.line(imgX_base, imgY_base, imgX_base + imgBoxW, imgY_base + imgBoxH);
               }
 
-              // 3. Category Tag hovering at Top LEFT Corner of Image
-              const catTagLabel = p.costCategoryName || p.extraAttributes?.["Categories"]?.split("/")[0]?.trim() || "";
-              if (catTagLabel) {
-                const isHighlight = ["新貨", "清貨", "季度熱賣"].includes(catTagLabel);
-                const badge = createCategoryBadgeDataUrl(catTagLabel, isHighlight);
-                if (badge.dataUrl) {
-                  doc.addImage(badge.dataUrl, "PNG", imgX_base + 0.8, imgY_base + 0.8, badge.widthMm, badge.heightMm);
-                }
-              }
-
-              // 4. Price Tag hovering at Bottom LEFT Corner of Image
+              // 3. Price Tag hovering at Bottom LEFT Corner of Image (Larger)
               const priceVal = parseFloat(getProductPrice(p));
               const priceStr = priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : "請詢價";
 
-              doc.setFontSize(7.5);
+              doc.setFontSize(9.2);
+              if (fontAdded) {
+                doc.setFont("NotoSansTC", "bold");
+              }
               const pWidth = doc.getTextWidth(priceStr);
-              const badgeW = Math.max(15, pWidth + 2.5);
-              const badgeH = 4.4;
+              const badgeW = Math.max(18, pWidth + 3.2);
+              const badgeH = 5.6;
               const badgeX = imgX_base + 0.8;
               const badgeY = imgY_base + imgBoxH - badgeH - 0.8;
 
               doc.setFillColor(255, 255, 255);
               doc.setDrawColor(226, 232, 240);
-              doc.setLineWidth(0.15);
-              doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 0.8, 0.8, "FD");
+              doc.setLineWidth(0.2);
+              doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.0, 1.0, "FD");
 
               if (isOutOfStock) {
                 doc.setTextColor(156, 163, 175);
               } else {
                 doc.setTextColor(15, 23, 42);
               }
-              doc.setFontSize(7.5);
-              doc.text(priceStr, badgeX + 1.2, badgeY + 3.2);
+              doc.text(priceStr, badgeX + 1.6, badgeY + 4.0);
+              if (fontAdded) {
+                doc.setFont("NotoSansTC", "normal");
+              }
 
-              // 5. Product Name at Bottom of Card
+              // 4. Product Name at Bottom of Card (Larger Font)
               const textX = cx + 1.2;
-              const nameStartY = imgY_base + imgBoxH + 2.8;
+              const nameStartY = imgY_base + imgBoxH + 2.6;
               const productNameStr = p.costName || p.name || "";
 
               if (fontAdded) {
-                doc.setFontSize(7.5);
+                doc.setFontSize(9);
                 if (isOutOfStock) {
                   doc.setTextColor(156, 163, 175);
                 } else {
@@ -1625,7 +1602,7 @@ export default function App() {
                 }
                 doc.text(line1, textX, nameStartY);
                 if (line2) {
-                  doc.text(line2, textX, nameStartY + 3.4);
+                  doc.text(line2, textX, nameStartY + 3.8);
                 }
               } else {
                 const textImg = createCanvasTextDataUrl(
@@ -1634,7 +1611,7 @@ export default function App() {
                   isOutOfStock ? "#9ca3af" : "#0f172a"
                 );
                 if (textImg.dataUrl) {
-                  doc.addImage(textImg.dataUrl, "PNG", textX, nameStartY - 1, textImg.widthMm, textImg.heightMm);
+                  doc.addImage(textImg.dataUrl, "PNG", textX, nameStartY - 1.2, textImg.widthMm, textImg.heightMm);
                 }
               }
             });
