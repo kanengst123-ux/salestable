@@ -566,16 +566,16 @@ function saveSheetSettings(settings: any) {
   }
 }
 
-async function triggerSheetsSync(id: string, name: string, price: string, quantity: string, remarks: string, action: string = "addProduct", priceA?: string, priceB?: string, priceC?: string, categorySymbol?: string) {
+async function triggerSheetsSync(id: string, name: string, price: string, quantity: string, remarks: string, action: string = "addProduct", priceA?: string, priceB?: string, priceC?: string, categorySymbol?: string, showOnPdf?: string) {
   const settings = getSheetSettings();
   if (settings.enabled && settings.appsScriptUrl) {
     try {
-      console.log(`[triggerSheetsSync] Sync payload details:`, { action, id, name, price, quantity, remarks, priceA, priceB, priceC, categorySymbol });
+      console.log(`[triggerSheetsSync] Sync payload details:`, { action, id, name, price, quantity, remarks, priceA, priceB, priceC, categorySymbol, showOnPdf });
       // Use dynamic import for fetch if needed, but since NodeJS 18 has global fetch, we call it directly
       const response = await fetch(settings.appsScriptUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, id, name, price, quantity, remarks, priceA, priceB, priceC, categorySymbol })
+        body: JSON.stringify({ action, id, name, price, quantity, remarks, priceA, priceB, priceC, categorySymbol, showOnPdf })
       });
       const responseText = await response.text();
       console.log("Apps Script response:", responseText);
@@ -735,7 +735,7 @@ function getSymbolForCategoryName(catName: string, symbolToName: Record<string, 
 
 app.post("/api/products", async (req, res) => {
   try {
-    const { id, name, price, quantity, remarks, base64Image, category } = req.body;
+    const { id, name, price, quantity, remarks, base64Image, category, showOnPdf } = req.body;
     if (!name) {
       return res.status(400).json({ error: "Name is required" });
     }
@@ -768,6 +768,17 @@ app.post("/api/products", async (req, res) => {
       console.error("Error determining category for manual add:", e);
     }
 
+    const showOnPdfVal = (showOnPdf === false || showOnPdf === "N") ? "N" : "0";
+
+    const allVals = new Array(31).fill("");
+    allVals[1] = finalId;
+    allVals[2] = name;
+    allVals[14] = price || "0";
+    allVals[27] = (isNaN(qtyNumber) || quantity === "") ? "1" : "0";
+    allVals[28] = secondaryStockCount;
+    allVals[29] = remarks || "";
+    allVals[30] = showOnPdfVal;
+
     const newProduct = {
       id: finalId,
       name,
@@ -778,19 +789,20 @@ app.post("/api/products", async (req, res) => {
       extraAttributes: {
         "Categories": "Local Additions",
         "Merchant Remark": remarks || "",
-        "remarks": remarks || ""
+        "remarks": remarks || "",
+        "show on pdf": showOnPdfVal
       },
       costCategorySymbol: catSymbol,
       costCategoryName: catName,
-      allValues: []
+      allValues: allVals
     };
 
     const localProducts = getLocalProducts();
     localProducts.unshift(newProduct);
     saveLocalProducts(localProducts);
 
-    // Sync to Google Sheet if enabled - we pass catSymbol as the 10th parameter (categorySymbol)
-    triggerSheetsSync(finalId, name, price || "0", quantity, remarks || "", "addProduct", undefined, undefined, undefined, catSymbol);
+    // Sync to Google Sheet if enabled - we pass catSymbol as the 10th parameter and showOnPdfVal as 11th parameter
+    triggerSheetsSync(finalId, name, price || "0", quantity, remarks || "", "addProduct", undefined, undefined, undefined, catSymbol, showOnPdfVal);
 
     res.json({ success: true, product: newProduct });
   } catch (error: any) {
@@ -802,8 +814,8 @@ app.post("/api/products", async (req, res) => {
 app.put("/api/products/:id", (req, res) => {
   try {
     const { id } = req.params;
-    const { name, price, priceA, priceB, priceC, quantity, remarks, base64Image } = req.body;
-    console.log(`[PUT /api/products/${id}] Received body:`, { name, price, priceA, priceB, priceC, quantity, remarks });
+    const { name, price, priceA, priceB, priceC, quantity, remarks, base64Image, showOnPdf } = req.body;
+    console.log(`[PUT /api/products/${id}] Received body:`, { name, price, priceA, priceB, priceC, quantity, remarks, showOnPdf });
     if (!name) {
       return res.status(400).json({ error: "Name is required" });
     }
@@ -830,19 +842,25 @@ app.put("/api/products/:id", (req, res) => {
     const finalPriceB = (priceB !== undefined && priceB.toString().trim() !== "") ? priceB.toString().trim() : finalPrice;
     const finalPriceC = (priceC !== undefined && priceC.toString().trim() !== "") ? priceC.toString().trim() : finalPrice;
 
+    const showOnPdfVal = (showOnPdf === false || showOnPdf === "N") ? "N" : (showOnPdf === true || showOnPdf === "0" || showOnPdf === "Y" ? "0" : undefined);
+
     let localProducts = getLocalProducts();
     const existingIndex = localProducts.findIndex((p: any) => p.id === id);
 
     if (existingIndex !== -1) {
       const updatedAllValues = [...(localProducts[existingIndex].allValues || [])];
-      if (updatedAllValues.length > 28) {
-        updatedAllValues[2] = name;
-        updatedAllValues[14] = finalPrice;
-        updatedAllValues[17] = finalPriceA;
-        updatedAllValues[18] = finalPriceB;
-        updatedAllValues[19] = finalPriceC;
-        updatedAllValues[27] = alwaysStock ? "1" : "0";
-        updatedAllValues[28] = secondaryStockCount;
+      while (updatedAllValues.length < 31) {
+        updatedAllValues.push("");
+      }
+      updatedAllValues[2] = name;
+      updatedAllValues[14] = finalPrice;
+      updatedAllValues[17] = finalPriceA;
+      updatedAllValues[18] = finalPriceB;
+      updatedAllValues[19] = finalPriceC;
+      updatedAllValues[27] = alwaysStock ? "1" : "0";
+      updatedAllValues[28] = secondaryStockCount;
+      if (showOnPdfVal !== undefined) {
+        updatedAllValues[30] = showOnPdfVal;
       }
       // Update existing local product
       localProducts[existingIndex] = {
@@ -858,7 +876,8 @@ app.put("/api/products/:id", (req, res) => {
         extraAttributes: {
           ...localProducts[existingIndex].extraAttributes,
           "Merchant Remark": remarks || "",
-          "remarks": remarks || ""
+          "remarks": remarks || "",
+          ...(showOnPdfVal !== undefined ? { "show on pdf": showOnPdfVal } : {})
         },
         allValues: updatedAllValues
       };
@@ -875,14 +894,18 @@ app.put("/api/products/:id", (req, res) => {
       }
 
       const updatedAllValues = [...(sheetProduct?.allValues || [])];
-      if (updatedAllValues.length > 28) {
-        updatedAllValues[2] = name;
-        updatedAllValues[14] = finalPrice;
-        updatedAllValues[17] = finalPriceA;
-        updatedAllValues[18] = finalPriceB;
-        updatedAllValues[19] = finalPriceC;
-        updatedAllValues[27] = alwaysStock ? "1" : "0";
-        updatedAllValues[28] = secondaryStockCount;
+      while (updatedAllValues.length < 31) {
+        updatedAllValues.push("");
+      }
+      updatedAllValues[2] = name;
+      updatedAllValues[14] = finalPrice;
+      updatedAllValues[17] = finalPriceA;
+      updatedAllValues[18] = finalPriceB;
+      updatedAllValues[19] = finalPriceC;
+      updatedAllValues[27] = alwaysStock ? "1" : "0";
+      updatedAllValues[28] = secondaryStockCount;
+      if (showOnPdfVal !== undefined) {
+        updatedAllValues[30] = showOnPdfVal;
       }
 
       const updatedProduct = {
@@ -898,7 +921,8 @@ app.put("/api/products/:id", (req, res) => {
         extraAttributes: {
           ...(sheetProduct?.extraAttributes || {}),
           "Merchant Remark": remarks || "",
-          "remarks": remarks || ""
+          "remarks": remarks || "",
+          ...(showOnPdfVal !== undefined ? { "show on pdf": showOnPdfVal } : {})
         },
         allValues: updatedAllValues
       };
@@ -909,7 +933,7 @@ app.put("/api/products/:id", (req, res) => {
     saveLocalProducts(localProducts);
 
     // Sync to Google Sheet if enabled
-    triggerSheetsSync(id, name, finalPrice, quantity, remarks || "", "updateProduct", finalPriceA, finalPriceB, finalPriceC);
+    triggerSheetsSync(id, name, finalPrice, quantity, remarks || "", "updateProduct", finalPriceA, finalPriceB, finalPriceC, undefined, showOnPdfVal);
 
     res.json({ success: true, message: "Product updated successfully" });
   } catch (error: any) {

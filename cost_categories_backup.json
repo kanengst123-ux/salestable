@@ -1,15 +1,5 @@
 {
-  "symbolToName": {
-    "M": "奶粉",
-    "D": "尿片",
-    "C": "中成藥",
-    "W": "成藥",
-    "E": "外用",
-    "F": "食品",
-    "H": "家品",
-    "S": "保健",
-    "X": "Px"
-  },
+  "symbolToName": {},
   "productIdToSymbol": {
     "id-6104311606935552": "X",
     "id-6434457153044480": "X",
@@ -1815,7 +1805,41 @@
     "id-5270843708801024": "E",
     "id-6537481103998976": "E",
     "id-6311891352551424": "E",
-    "id-5589445842436096": "W"
+    "id-5589445842436096": "W",
+    "id-5008564668989440": "M",
+    "id-6294079754076160": "M",
+    "id-4998676949630976": "M",
+    "id-6405939828490240": "M",
+    "id-5294716462432256": "E",
+    "id-4531906212134912": "M",
+    "id-6034288188194816": "W",
+    "id-4761483790385152": "H",
+    "id-5657161202794496": "C",
+    "id-4621362730500096": "H",
+    "id-5644424879931392": "F",
+    "id-5464176511025152": "E",
+    "id-5346823911636992": "E",
+    "id-5187927167336448": "H",
+    "id-5772580932681728": "E",
+    "id-6738585246892032": "H",
+    "id-6411536103768064": "H",
+    "id-6416236744146944": "H",
+    "id-4587420610592768": "H",
+    "id-5864920179408896": "H",
+    "id-5818047087378432": "E",
+    "id-5450514488492032": "H",
+    "id-6195941429084160": "H",
+    "id-5848868468948992": "H",
+    "id-5666234287652864": "M",
+    "id-6616212334051328": "M",
+    "id-6689135677800448": "M",
+    "id-5370280170881024": "H",
+    "id-4625127839760384": "H",
+    "id-4842393558712320": "C",
+    "id-5519254366322688": "F",
+    "id-6035490544156672": "F",
+    "id-4965398167289856": "H",
+    "id-5599339970691072": "E"
   },
   "productIdToCostName": {
     "id-6104311606935552": "‼️(WS)(PS4)Clarinase® Repetabs Tablets 佳連利絲 EXP2026.12",
@@ -2342,7 +2366,7 @@
     "id-5438867824836608": "Huggies純水嬰兒濕巾30片3包裝    8/箱",
     "id-4685260280168448": "Huggies純水嬰兒濕巾64片3包裝    6/箱",
     "id-5962139461091328": "Hylo Gel 10ml （行貨）",
-    "id-4757464804098048": "illuma 1",
+    "id-4757464804098048": "illuma 1新裝    6／箱",
     "id-5051066973290496": "illuma 1 有機 organic(新裝）  6/箱",
     "id-5958071120429056": "Illuma 2 新裝    6/箱",
     "id-5427178802905088": "Illuma 3 新裝   6/箱",
@@ -2387,7 +2411,7 @@
     "id-5521296849764352": "Kotex高潔絲梔子花護墊25片",
     "id-5943978397401088": "Kotex高潔絲梔子花超薄日用23cm 11片",
     "id-5933157990662144": "Kotex高潔絲極柔安心熟睡褲M-L4片X2 優惠孖裝",
-    "id-6146109096198144": "kotex高潔絲極致綿柔超薄日用23cm 15係片 粉",
+    "id-6146109096198144": "kotex高潔絲極致綿柔超薄日用23cm 15片 粉",
     "id-5042889372336128": "Kotex高潔絲特長透氣護墊橘子花17.5cn 24片",
     "id-5433004875710464": "Kotex高潔絲粉櫻花特長護墊17.5cm 24片",
     "id-6424478782193664": "kotex高潔絲草本纖巧日夜用28cm10片",
@@ -2410,7 +2434,7 @@
     "id-5579033654722560": "Merries (花王) XL 褲 46片（3/箱） 白皮箱版",
     "id-5553134569914368": "Merries (花王) XXL 褲 26片(3/箱）",
     "id-4729331644235776": "Merries (花王) XXL 褲 30片(3/箱）",
-    "id-4840297962799104": "Merries (花王)尿片 M 56片（4/箱）",
+    "id-4840297962799104": "Merries (花王)尿片 M 54片（2/箱）",
     "id-5434484940734464": "Merries 花王 褲仔 PB46 (XL) 珍寶裝 普通版 3/箱",
     "id-6575691708366848": "Merries 花王 褲仔 PL54 珍寶裝 普通版3/箱",
     "id-4981233896259584": "Merries 花王 褲仔PB40(XL)增量裝 2/箱",
@@ -2524,10 +2548,10 @@
     "id-5961728620625920": "Tempo 面巾 四盒裝",
     "id-6183535038562304": "​tempo×Miffy四層櫻花味卷紙",
     "id-6540245091614720": "​tempo×Miffy櫻花味軟抽五包裝",
-    "id-5626443504418816": "​tempo×Miffy濕廁紙櫻花味80片裝",
+    "id-5626443504418816": "​tempo×Miffy濕廁紙櫻花味7片​×6包裝​（10包/盒）",
     "id-5749500894117888": "​​tempo掛墻式極吸萬用抹手紙",
     "id-5634393404997632": "Tempo掛牆式廚紙",
-    "id-6165661347610624": "Tempo茉莉廁紙10卷裝",
+    "id-6165661347610624": "Tempo原味廁紙10卷裝",
     "id-6543405969440768": "Tempo藍風鈴四層面紙巾",
     "id-6425265734287360": "tempo蘋果木 10卷裝",
     "id-6562174875860992": "​tempo閃鑽4層卷紙水蜜桃味",
@@ -2773,7 +2797,7 @@
     "id-6635421755637760": "威露士消毒濕巾258片 (高效去污)   6/箱",
     "id-6231072160219136": "威露士消毒濕巾300片 (檸檬)  6/箱",
     "id-5162888795652096": "威露士消毒濕巾300片 (高效去污)   6/箱",
-    "id-6348982669148160": "威露士消毒濕巾7片裝     12/箱",
+    "id-6348982669148160": "#N/A",
     "id-4833533527719936": "威露士濕紙巾七片九包裝 12/箱",
     "id-5225275850620928": "威露士蘆薈消毒濕紙巾50片",
     "id-4892754881413120": "威露士酒精搓手液1L（6/箱）",
@@ -2785,7 +2809,7 @@
     "id-5743946196975616": "安怡 長青1900g 6/箱",
     "id-5180996243554304": "安怡 關節適 800g",
     "id-5399189507670016": "安怡 關節適1500g   6/箱",
-    "id-6207179357814784": "安美露 紅 (極治)（1條10)",
+    "id-6207179357814784": "安美露 紅 (極治) 80ml (1條10)",
     "id-5040258755198976": "安美露 紅（1條10u)",
     "id-6166158662041600": "安美露 藍（1條10u)",
     "id-6595875353526272": "安耐曬Shiseido Anessa 高效水感防曬者喱90g",
@@ -3255,7 +3279,7 @@
     "id-4772301286277120": "特強幸福傷風咳素8粒",
     "id-5396036531912704": "特强幸福止痛素 24's    12/條",
     "id-5136067907682304": "特快靈殺菌喉糖 (檸檬蜜糖) 一條10",
-    "id-5699017861103616": "特快靈殺菌喉糖 (香橙) 一條10",
+    "id-5699017861103616": "特快靈殺菌喉糖 (香橙) 一條10 2/2027",
     "id-4589764064706560": "特快靈鎮痛殺菌喉糖 (提子)一條10",
     "id-5415898373292032": "獅王漱口水 600毫升加牙膏 （黃）",
     "id-5300480656670720": "獅王漱口水 金橘薄荷600毫升加牙膏套裝6/箱",
@@ -3523,9 +3547,9 @@
     "id-6489720157503488": "雅培 保兒加營素 3+    12/箱",
     "id-4660132808884224": "雅培 保兒加營素 3+ (朱古力)    12/箱",
     "id-4545542410338304": "雅培 心美力 1    6/箱",
-    "id-6353069338918912": "雅培 心美力 2    6/箱 1/27",
-    "id-5442983682768896": "雅培 心美力 2號850g 2027年10月",
-    "id-5353527831298048": "雅培 心美力 3    6/箱 10/27",
+    "id-6353069338918912": "#N/A",
+    "id-5442983682768896": "雅培 心美力 2號  6/箱",
+    "id-5353527831298048": "雅培 心美力 3    6/箱",
     "id-4618046290132992": "雅培 心美力 4   6/箱",
     "id-5500711532888064": "雅培 心美力3號 1/27",
     "id-6430024138620928": "雅培 怡保康    12/箱",
@@ -3622,102 +3646,119 @@
     "id-5270843708801024": "SKATER 儿童平面口罩 7枚入（适合4岁以上)",
     "id-6537481103998976": "SKATER 儿童口罩 10枚入(鲨鱼)",
     "id-6311891352551424": "撒隆適搵熱膏貼12片",
-    "id-5589445842436096": "立康眼水 2-2028"
+    "id-5589445842436096": "立康眼水 2-2028",
+    "id-5008564668989440": "A2 白金優質4段（行貨），6/箱",
+    "id-6294079754076160": "A2 白金優質3段（行貨），6/箱",
+    "id-4998676949630976": "A2 白金優質2段（行貨），6/箱",
+    "id-6405939828490240": "A2 白金優質1段（行貨），6/箱",
+    "id-5294716462432256": "Dove 多芬日本極致輕氧保濕洗髮乳",
+    "id-4531906212134912": "Neurio藍鑽 紐約優蛋白粉（06/27）",
+    "id-6034288188194816": "特快靈殺菌喉糖 (香橙) 一條10",
+    "id-4761483790385152": "威潔手洗潔衣液1公升孖裝（6/箱）",
+    "id-5657161202794496": "太田胃散，50包/盒",
+    "id-4621362730500096": "白蘭香氛白麝香洗衣球",
+    "id-5644424879931392": "SanRIMO 意大利粉",
+    "id-5464176511025152": "Averno Relief body wash",
+    "id-5346823911636992": "​艾詩芳香沐浴露550ml孖裝+強韌豐盈洗髮露180ml（浪漫花香）（6/箱)",
+    "id-5187927167336448": "威潔33超濃縮洗衣粉（無磷環保配方）2.25公升補充袋裝+艾詩芳香沐浴露180ml（6/箱）",
+    "id-5772580932681728": "​艾詩芳香沐浴露550ml孖裝+強韌豐盈洗髮露180ml（魅力花香）（6/箱)",
+    "id-6738585246892032": "來舒LYSOL殺菌消毒噴霧 340g",
+    "id-6411536103768064": "(wc)詩樂氏多效消毒潔廁液 500ml",
+    "id-6416236744146944": "(wc)詩樂氏 衣物留香珠 885ml",
+    "id-4587420610592768": "(wc)詩樂氏超濃縮洗衣珠 (32粒裝)",
+    "id-5864920179408896": "(wc)詩樂氏超濃縮洗衣珠 清新味(32粒裝)",
+    "id-5818047087378432": "Oral b 清檸薄荷牙膏120gX4",
+    "id-5450514488492032": "威露士泡沫殺菌洗手液健康清香三支+濕巾7sx2 6/箱",
+    "id-6195941429084160": "​AXE超濃縮洗潔精500g（清雅花香）（18/箱）",
+    "id-5848868468948992": "​威露士萬用家居消毒劑1L（寵物家庭適用）（12/箱）",
+    "id-5666234287652864": "雀巢能恩全護 4號",
+    "id-6616212334051328": "雀巢能恩全護 3 號",
+    "id-6689135677800448": "雀巢能恩全護 2號",
+    "id-5370280170881024": "Oral B舒適深潔牙線",
+    "id-4625127839760384": "Oral B深層清潔牙線",
+    "id-4842393558712320": "馬百良秋梨潤喉蜜 12/盒",
+    "id-5519254366322688": "美心流心奶黃月餅",
+    "id-6035490544156672": "美心雙黃白蓮蓉月餅",
+    "id-4965398167289856": "潔霸超濃縮殺菌洗衣棒 殺菌消毒液68支裝",
+    "id-5599339970691072": "安耐曬90ml（粉金）"
   },
-  "categoryOrder": [
-    {
-      "symbol": "M",
-      "name": "奶粉"
-    },
-    {
-      "symbol": "D",
-      "name": "尿片"
-    },
-    {
-      "symbol": "C",
-      "name": "中成藥"
-    },
-    {
-      "symbol": "W",
-      "name": "成藥"
-    },
-    {
-      "symbol": "E",
-      "name": "外用"
-    },
-    {
-      "symbol": "F",
-      "name": "食品"
-    },
-    {
-      "symbol": "H",
-      "name": "家品"
-    },
-    {
-      "symbol": "S",
-      "name": "保健"
-    },
-    {
-      "symbol": "X",
-      "name": "Px"
-    }
-  ],
+  "categoryOrder": [],
   "highlightCategories": [
-    "新貨",
-    "清貨",
     "季度熱賣",
-    "個人",
-    "Test"
+    "清貨大促銷",
+    "奶粉",
+    "頭水",
+    "DETTOL滴露產品",
+    "PAMPERS(日版)",
+    "港版PAMPERS",
+    "花王尿片/褲 (日版)",
+    "幸福",
+    "必理痛GSK",
+    "撒隆巴斯",
+    "舊街場",
+    "便利通/妥",
+    "曼秀雷敦",
+    "農本方",
+    "漁夫之寶",
+    "虎標",
+    "李施德林",
+    "舒適達/牙齦適",
+    "高露潔/滴潔",
+    "ORAL B",
+    "強生",
+    "DOVE",
+    "花王清潔劑",
+    "威露士",
+    "白蘭氏",
+    "馬百良",
+    "威寶",
+    "使立消",
+    "ACCU",
+    "KOTEX",
+    "護舒寶",
+    "SWISSE",
+    "BIO ISLAND",
+    "BLACKMORE",
+    "善存/佳存",
+    "DUREX杜蕾斯",
+    "龍角",
+    "小林/ 無比",
+    "爽潔",
+    "妙思樂",
+    "凡士林",
+    "OLAY",
+    "BETADINE必妥典/ 特快靈/ 得果定",
+    "艾斯",
+    "美源",
+    "獅王",
+    "日本水貨",
+    "澳洲水貨",
+    "歐美水貨",
+    "泰國水貨",
+    "母嬰育兒",
+    "西成藥",
+    "中成藥",
+    "頭髮及面部清潔護理",
+    "身體清潔護理",
+    "口腔清潔",
+    "洗衣",
+    "浴室",
+    "廚房",
+    "客廳",
+    "食品",
+    "飲品",
+    "護膚",
+    "寵物",
+    "眼水",
+    "健康",
+    "防蚊",
+    "沖劑",
+    "紙品",
+    "熱賣搶購",
+    "家用"
   ],
-  "brands": [
-    "滴露",
-    "美贊臣",
-    "美素佳兒",
-    "三花",
-    "Pampers",
-    "Dove"
-  ],
+  "brands": [],
   "sectionsOrder": [
-    {
-      "type": "brand",
-      "symbol": "Brand",
-      "name": "滴露"
-    },
-    {
-      "type": "brand",
-      "symbol": "Brand",
-      "name": "美贊臣"
-    },
-    {
-      "type": "brand",
-      "symbol": "Brand",
-      "name": "美素佳兒"
-    },
-    {
-      "type": "brand",
-      "symbol": "Brand",
-      "name": "三花"
-    },
-    {
-      "type": "brand",
-      "symbol": "Brand",
-      "name": "Pampers"
-    },
-    {
-      "type": "brand",
-      "symbol": "Brand",
-      "name": "Dove"
-    },
-    {
-      "type": "categories",
-      "symbol": "Categories",
-      "name": "新貨"
-    },
-    {
-      "type": "categories",
-      "symbol": "Categories",
-      "name": "清貨"
-    },
     {
       "type": "categories",
       "symbol": "Categories",
@@ -3726,57 +3767,357 @@
     {
       "type": "categories",
       "symbol": "Categories",
-      "name": "個人"
+      "name": "清貨大促銷"
     },
     {
       "type": "categories",
       "symbol": "Categories",
-      "name": "Test"
-    },
-    {
-      "type": "category",
-      "symbol": "M",
       "name": "奶粉"
     },
     {
-      "type": "category",
-      "symbol": "D",
-      "name": "尿片"
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "頭水"
     },
     {
-      "type": "category",
-      "symbol": "C",
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "DETTOL滴露產品"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "PAMPERS(日版)"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "港版PAMPERS"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "花王尿片/褲 (日版)"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "幸福"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "必理痛GSK"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "撒隆巴斯"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "舊街場"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "便利通/妥"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "曼秀雷敦"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "農本方"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "漁夫之寶"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "虎標"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "李施德林"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "舒適達/牙齦適"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "高露潔/滴潔"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "ORAL B"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "強生"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "DOVE"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "花王清潔劑"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "威露士"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "白蘭氏"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "馬百良"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "威寶"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "使立消"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "ACCU"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "KOTEX"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "護舒寶"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "SWISSE"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "BIO ISLAND"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "BLACKMORE"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "善存/佳存"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "DUREX杜蕾斯"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "龍角"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "小林/ 無比"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "爽潔"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "妙思樂"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "凡士林"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "OLAY"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "BETADINE必妥典/ 特快靈/ 得果定"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "艾斯"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "美源"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "獅王"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "日本水貨"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "澳洲水貨"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "歐美水貨"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "泰國水貨"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "母嬰育兒"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "西成藥"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
       "name": "中成藥"
     },
     {
-      "type": "category",
-      "symbol": "W",
-      "name": "成藥"
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "頭髮及面部清潔護理"
     },
     {
-      "type": "category",
-      "symbol": "E",
-      "name": "外用"
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "身體清潔護理"
     },
     {
-      "type": "category",
-      "symbol": "F",
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "口腔清潔"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "洗衣"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "浴室"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "廚房"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "客廳"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
       "name": "食品"
     },
     {
-      "type": "category",
-      "symbol": "H",
-      "name": "家品"
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "飲品"
     },
     {
-      "type": "category",
-      "symbol": "S",
-      "name": "保健"
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "護膚"
     },
     {
-      "type": "category",
-      "symbol": "X",
-      "name": "Px"
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "寵物"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "眼水"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "健康"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "防蚊"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "沖劑"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "紙品"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "熱賣搶購"
+    },
+    {
+      "type": "categories",
+      "symbol": "Categories",
+      "name": "家用"
     }
   ]
 }

@@ -903,8 +903,8 @@ export default function App() {
       const ctx = canvas.getContext("2d");
       if (!ctx) return { dataUrl: "", widthMm: 0, heightMm: 0 };
 
-      const fontSize = 32;
-      const lineHeight = 38;
+      const fontSize = 38;
+      const lineHeight = 44;
       ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", sans-serif`;
 
       const chars = text.split("");
@@ -949,7 +949,7 @@ export default function App() {
         ctx.fillText(line2, 0, lineHeight + 2);
       }
 
-      const heightMm = numLines * 4.0;
+      const heightMm = numLines * 4.6;
       return { dataUrl: canvas.toDataURL("image/png"), widthMm: maxWidthMm, heightMm };
     } catch (e) {
       return { dataUrl: "", widthMm: 0, heightMm: 0 };
@@ -1486,9 +1486,9 @@ export default function App() {
               doc.roundedRect(cx, cy, cardW, cardH, 2, 2, "F");
 
               // 2. Image inside Card
-              const pad = 1.2;
-              const imgBoxW = cardW - (pad * 2); // 45.1 mm
-              const imgBoxH = 46.5; // 46.5 mm
+              const pad = 1.0;
+              const imgBoxW = cardW - (pad * 2); // 45.5 mm
+              const imgBoxH = 41.5; // 41.5 mm (provides comfortable vertical space for larger typography)
               const imgX_base = cx + pad;
               const imgY_base = cy + pad;
 
@@ -1553,17 +1553,17 @@ export default function App() {
                 doc.line(imgX_base, imgY_base, imgX_base + imgBoxW, imgY_base + imgBoxH);
               }
 
-              // 3. Price Tag hovering at Bottom LEFT Corner of Image (Larger)
+              // 3. Price Tag hovering at Bottom LEFT Corner of Image (Significantly Larger & Bolder)
               const priceVal = parseFloat(getProductPrice(p));
               const priceStr = priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : "請詢價";
 
-              doc.setFontSize(9.2);
+              doc.setFontSize(10.5);
               if (fontAdded) {
                 doc.setFont("NotoSansTC", "bold");
               }
               const pWidth = doc.getTextWidth(priceStr);
-              const badgeW = Math.max(18, pWidth + 3.2);
-              const badgeH = 5.6;
+              const badgeW = Math.max(22, pWidth + 3.8);
+              const badgeH = 6.2;
               const badgeX = imgX_base + 0.8;
               const badgeY = imgY_base + imgBoxH - badgeH - 0.8;
 
@@ -1577,18 +1577,19 @@ export default function App() {
               } else {
                 doc.setTextColor(15, 23, 42);
               }
-              doc.text(priceStr, badgeX + 1.6, badgeY + 4.0);
+              doc.text(priceStr, badgeX + 1.8, badgeY + 4.5);
               if (fontAdded) {
                 doc.setFont("NotoSansTC", "normal");
               }
 
-              // 4. Product Name at Bottom of Card (Larger Font)
+              // 4. Product Name at Bottom of Card (Significantly Larger Font: 10.2pt Bold)
               const textX = cx + 1.2;
-              const nameStartY = imgY_base + imgBoxH + 2.6;
+              const nameStartY = imgY_base + imgBoxH + 3.2;
               const productNameStr = p.costName || p.name || "";
 
               if (fontAdded) {
-                doc.setFontSize(9);
+                doc.setFontSize(10.2);
+                doc.setFont("NotoSansTC", "bold");
                 if (isOutOfStock) {
                   doc.setTextColor(156, 163, 175);
                 } else {
@@ -1602,7 +1603,7 @@ export default function App() {
                 }
                 doc.text(line1, textX, nameStartY);
                 if (line2) {
-                  doc.text(line2, textX, nameStartY + 3.8);
+                  doc.text(line2, textX, nameStartY + 4.4);
                 }
               } else {
                 const textImg = createCanvasTextDataUrl(
@@ -1692,6 +1693,7 @@ export default function App() {
   const [isSubmittingProduct, setIsSubmittingProduct] = useState<boolean>(false);
   const [promoCategories, setPromoCategories] = useState<string[]>([]);
   const [newProductCategory, setNewProductCategory] = useState<string>("");
+  const [newProductShowOnPdf, setNewProductShowOnPdf] = useState<boolean>(true);
 
   // Edit Product States
   const [isEditingSelectedProduct, setIsEditingSelectedProduct] = useState<boolean>(false);
@@ -1704,6 +1706,7 @@ export default function App() {
   const [editProductRemarks, setEditProductRemarks] = useState<string>("");
   const [editProductImageFile, setEditProductImageFile] = useState<File | null>(null);
   const [editProductImagePreview, setEditProductImagePreview] = useState<string>("");
+  const [editProductShowOnPdf, setEditProductShowOnPdf] = useState<boolean>(true);
   const [isUpdatingProduct, setIsUpdatingProduct] = useState<boolean>(false);
 
   const totalStorageSize = useMemo(() => {
@@ -1895,7 +1898,8 @@ export default function App() {
         quantity: newProductQuantity.trim(),
         remarks: newProductRemarks.trim(),
         base64Image: newProductImagePreview,
-        category: newProductCategory
+        category: newProductCategory,
+        showOnPdf: newProductShowOnPdf
       };
 
       const res = await fetch("/api/products", {
@@ -1921,6 +1925,7 @@ export default function App() {
       setNewProductCategory("");
       setNewProductImageFile(null);
       setNewProductImagePreview("");
+      setNewProductShowOnPdf(true);
       
       // Reload products catalog of the grid instantly
       await loadProducts(true);
@@ -1963,6 +1968,7 @@ export default function App() {
       const finalPriceA = editProductPriceA.trim() || finalPrice;
       const finalPriceB = editProductPriceB.trim() || finalPrice;
       const finalPriceC = editProductPriceC.trim() || finalPrice;
+      const showPdfStr = editProductShowOnPdf ? "0" : "N";
 
       const payload = {
         id: selectedProduct.id,
@@ -1973,7 +1979,8 @@ export default function App() {
         priceC: finalPriceC,
         quantity: editProductQuantity.trim(),
         remarks: editProductRemarks.trim(),
-        base64Image: editProductImagePreview.startsWith("data:image") ? editProductImagePreview : undefined
+        base64Image: editProductImagePreview.startsWith("data:image") ? editProductImagePreview : undefined,
+        showOnPdf: editProductShowOnPdf
       };
 
       const res = await fetch(`/api/products/${selectedProduct.id}`, {
@@ -1999,15 +2006,18 @@ export default function App() {
       const qtyNumber = parseInt(editProductQuantity.trim(), 10);
       const hasStock = isNaN(qtyNumber) ? true : qtyNumber > 0;
       const updatedAllValues = [...(selectedProduct.allValues || [])];
-      if (updatedAllValues.length > 28) {
-        updatedAllValues[2] = editProductName.trim();
-        updatedAllValues[14] = finalPrice;
-        updatedAllValues[17] = finalPriceA;
-        updatedAllValues[18] = finalPriceB;
-        updatedAllValues[19] = finalPriceC;
-        updatedAllValues[27] = (isNaN(qtyNumber) || editProductQuantity.trim() === "") ? "1" : "0";
-        updatedAllValues[28] = isNaN(qtyNumber) ? "" : qtyNumber.toString();
+      while (updatedAllValues.length < 31) {
+        updatedAllValues.push("");
       }
+      updatedAllValues[2] = editProductName.trim();
+      updatedAllValues[14] = finalPrice;
+      updatedAllValues[17] = finalPriceA;
+      updatedAllValues[18] = finalPriceB;
+      updatedAllValues[19] = finalPriceC;
+      updatedAllValues[27] = (isNaN(qtyNumber) || editProductQuantity.trim() === "") ? "1" : "0";
+      updatedAllValues[28] = isNaN(qtyNumber) ? "" : qtyNumber.toString();
+      updatedAllValues[30] = showPdfStr;
+
       setSelectedProduct({
         ...selectedProduct,
         name: editProductName.trim(),
@@ -2021,7 +2031,8 @@ export default function App() {
         extraAttributes: {
           ...selectedProduct.extraAttributes,
           "Merchant Remark": editProductRemarks.trim(),
-          "remarks": editProductRemarks.trim()
+          "remarks": editProductRemarks.trim(),
+          "show on pdf": showPdfStr
         },
         allValues: updatedAllValues
       });
@@ -2044,6 +2055,15 @@ export default function App() {
     setEditProductRemarks(selectedProduct.extraAttributes?.["Merchant Remark"] || selectedProduct.extraAttributes?.["remarks"] || "");
     setEditProductImageFile(null);
     setEditProductImagePreview(""); // resets preview
+
+    const showPdfRaw = (
+      selectedProduct.extraAttributes?.["show on pdf"] ||
+      selectedProduct.extraAttributes?.["show on pdf "] ||
+      (selectedProduct.allValues ? selectedProduct.allValues[30] : "") ||
+      ""
+    ).trim().toUpperCase();
+    setEditProductShowOnPdf(showPdfRaw !== "N");
+
     setIsEditingSelectedProduct(true);
   };
 
@@ -3758,8 +3778,22 @@ export default function App() {
                 </div>
 
                 {/* Right Col: Complex attributes listing */}
-                <div className="p-6 md:p-8 flex flex-col justify-between flex-grow">
+                <div className="p-6 md:p-8 flex flex-col justify-between flex-grow overflow-y-auto max-h-[85vh]">
                   <div className="space-y-4">
+                    {/* Product Name Input */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                        商品名稱
+                      </label>
+                      <input 
+                        type="text"
+                        placeholder="請輸入商品名稱"
+                        value={editProductName}
+                        onChange={(e) => setEditProductName(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3.5 py-2.5 text-xs font-bold transition-all outline-none"
+                      />
+                    </div>
+
                     {/* Pricing Input: Single Price */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
@@ -3862,6 +3896,46 @@ export default function App() {
                         rows={3}
                         className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3.5 py-2.5 text-xs transition-all outline-none resize-none"
                       />
+                    </div>
+
+                    {/* Show on PDF Toggle (Col AE) */}
+                    <div className="bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/80 flex items-center justify-between transition-all">
+                      <div className="flex items-start gap-2.5 pr-2">
+                        <div className={`p-2 rounded-xl mt-0.5 ${editProductShowOnPdf ? "bg-indigo-100 text-indigo-700" : "bg-slate-200 text-slate-500"}`}>
+                          <FileText className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <label className="text-xs font-bold text-slate-800">
+                              在 PDF 目錄中顯示
+                            </label>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              Col AE (show on PDF)
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                            {editProductShowOnPdf 
+                              ? "已開啟：此商品將包含在導出的 PDF 目錄中 (Col AE = 0)" 
+                              : "已關閉：此商品將從 PDF 目錄中隱藏排除 (Col AE = N)"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={editProductShowOnPdf}
+                        onClick={() => setEditProductShowOnPdf(!editProductShowOnPdf)}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                          editProductShowOnPdf ? "bg-indigo-600" : "bg-slate-300"
+                        }`}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                            editProductShowOnPdf ? "translate-x-5" : "translate-x-0"
+                          }`}
+                        />
+                      </button>
                     </div>
 
                   </div>
@@ -3999,6 +4073,29 @@ export default function App() {
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
                             {selectedProduct.extraAttributes["Publish Status"] || "已發布"}
                           </span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block font-medium">PDF 目錄 (Col AE)：</span>
+                          {(() => {
+                            const showPdfVal = (
+                              selectedProduct.extraAttributes?.["show on pdf"] ||
+                              selectedProduct.extraAttributes?.["show on pdf "] ||
+                              (selectedProduct.allValues ? selectedProduct.allValues[30] : "") ||
+                              ""
+                            ).trim().toUpperCase();
+                            const isShown = showPdfVal !== "N";
+                            return isShown ? (
+                              <span className="text-emerald-700 font-semibold flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                                包含於 PDF 目錄
+                              </span>
+                            ) : (
+                              <span className="text-rose-600 font-semibold flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                                PDF 中隱藏 (N)
+                              </span>
+                            );
+                          })()}
                         </div>
                         {selectedProduct.extraAttributes["Weight (kg)"] && (
                           <div>
@@ -4979,6 +5076,46 @@ export default function App() {
                   />
                 </div>
 
+                {/* Show on PDF Toggle (Col AE) */}
+                <div className="bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/80 flex items-center justify-between transition-all">
+                  <div className="flex items-start gap-2.5 pr-2">
+                    <div className={`p-2 rounded-xl mt-0.5 ${newProductShowOnPdf ? "bg-indigo-100 text-indigo-700" : "bg-slate-200 text-slate-500"}`}>
+                      <FileText className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-xs font-bold text-slate-800">
+                          在 PDF 目錄中顯示
+                        </label>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          Col AE (show on PDF)
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+                        {newProductShowOnPdf 
+                          ? "已開啟：此新商品將包含在導出的 PDF 目錄中 (Col AE = 0)" 
+                          : "已關閉：此新商品將從 PDF 目錄中隱藏排除 (Col AE = N)"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={newProductShowOnPdf}
+                    onClick={() => setNewProductShowOnPdf(!newProductShowOnPdf)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      newProductShowOnPdf ? "bg-indigo-600" : "bg-slate-300"
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                        newProductShowOnPdf ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
+
               </div>
 
               {/* Footer */}
@@ -5217,6 +5354,14 @@ function doPost(e) {
       sheet.getRange(rowToUpdate, 28).setValue(abVal); // Col AB: UnlimitedStock
       sheet.getRange(rowToUpdate, 29).setValue(acVal); // Col AC: Stock / 庫存
       sheet.getRange(rowToUpdate, 30).setValue(remarks || ""); // Col AD: Remarks
+      
+      var showOnPdf = param.showOnPdf;
+      if (showOnPdf !== undefined && showOnPdf !== "") {
+        var showPdfVal = (showOnPdf === false || showOnPdf === "N") ? "N" : "0";
+        sheet.getRange(rowToUpdate, 31).setValue(showPdfVal); // Col AE: show on pdf
+      } else if (foundIndex === -1) {
+        sheet.getRange(rowToUpdate, 31).setValue("0"); // Col AE: default new product to show on PDF (0)
+      }
       
       return ContentService.createTextOutput(JSON.stringify({ 
         status: 'success', 
