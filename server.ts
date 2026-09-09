@@ -650,6 +650,21 @@ app.get("/api/image-proxy", async (req, res) => {
   }
 });
 
+app.get("/api/fonts/:filename", (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const fontPath = path.join(process.cwd(), "public", "fonts", filename);
+    if (fs.existsSync(fontPath)) {
+      res.setHeader("Content-Type", "font/ttf");
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      return res.sendFile(fontPath);
+    }
+    return res.status(404).send("Font not found");
+  } catch (err: any) {
+    return res.status(500).send(err.message || "Font route error");
+  }
+});
+
 app.post("/api/sync-sheet-images", async (req, res) => {
   try {
     syncSheet15Images();
@@ -773,10 +788,11 @@ app.post("/api/products", async (req, res) => {
     const allVals = new Array(31).fill("");
     allVals[1] = finalId;
     allVals[2] = name;
+    allVals[12] = remarks || "";
     allVals[14] = price || "0";
     allVals[27] = (isNaN(qtyNumber) || quantity === "") ? "1" : "0";
     allVals[28] = secondaryStockCount;
-    allVals[29] = remarks || "";
+    allVals[29] = "";
     allVals[30] = showOnPdfVal;
 
     const newProduct = {
@@ -787,7 +803,7 @@ app.post("/api/products", async (req, res) => {
       alwaysStock: isNaN(qtyNumber) || quantity === "",
       secondaryStockCount,
       extraAttributes: {
-        "Categories": "Local Additions",
+        "Categories": remarks || "Local Additions",
         "Merchant Remark": remarks || "",
         "remarks": remarks || "",
         "show on pdf": showOnPdfVal
@@ -853,6 +869,9 @@ app.put("/api/products/:id", (req, res) => {
         updatedAllValues.push("");
       }
       updatedAllValues[2] = name;
+      if (remarks !== undefined) {
+        updatedAllValues[12] = remarks;
+      }
       updatedAllValues[14] = finalPrice;
       updatedAllValues[17] = finalPriceA;
       updatedAllValues[18] = finalPriceB;
@@ -875,8 +894,7 @@ app.put("/api/products/:id", (req, res) => {
         secondaryStockCount,
         extraAttributes: {
           ...localProducts[existingIndex].extraAttributes,
-          "Merchant Remark": remarks || "",
-          "remarks": remarks || "",
+          ...(remarks !== undefined ? { "Categories": remarks, "Merchant Remark": remarks, "remarks": remarks } : {}),
           ...(showOnPdfVal !== undefined ? { "show on pdf": showOnPdfVal } : {})
         },
         allValues: updatedAllValues
@@ -898,6 +916,9 @@ app.put("/api/products/:id", (req, res) => {
         updatedAllValues.push("");
       }
       updatedAllValues[2] = name;
+      if (remarks !== undefined) {
+        updatedAllValues[12] = remarks;
+      }
       updatedAllValues[14] = finalPrice;
       updatedAllValues[17] = finalPriceA;
       updatedAllValues[18] = finalPriceB;
@@ -920,8 +941,7 @@ app.put("/api/products/:id", (req, res) => {
         secondaryStockCount,
         extraAttributes: {
           ...(sheetProduct?.extraAttributes || {}),
-          "Merchant Remark": remarks || "",
-          "remarks": remarks || "",
+          ...(remarks !== undefined ? { "Categories": remarks, "Merchant Remark": remarks, "remarks": remarks } : {}),
           ...(showOnPdfVal !== undefined ? { "show on pdf": showOnPdfVal } : {})
         },
         allValues: updatedAllValues

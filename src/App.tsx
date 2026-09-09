@@ -970,13 +970,15 @@ export default function App() {
 
       let fontAdded = false;
       try {
-        let fontUrl = "https://fonts.gstatic.com/s/notosanstc/v39/-nFuOG829Oofr2wohFbTp9ifNAn722rq0MXz76Cy_Co.ttf";
+        const localFontUrl = "/fonts/NotoSansTC-Regular.ttf";
+        const apiFontUrl = "/api/fonts/NotoSansTC-Regular.ttf";
+        const cdnFallbackUrl = "https://fonts.gstatic.com/s/notosanstc/v39/-nFuOG829Oofr2wohFbTp9ifNAn722rq0MXz76Cy_Co.ttf";
         
         let res: Response | null = null;
         if (typeof window !== "undefined" && "caches" in window) {
           try {
             const cache = await caches.open("product-images-v1");
-            const matched = await cache.match(fontUrl);
+            const matched = await cache.match(localFontUrl) || await cache.match(apiFontUrl) || await cache.match(cdnFallbackUrl);
             if (matched) {
               res = matched;
             }
@@ -986,17 +988,54 @@ export default function App() {
         }
 
         if (!res) {
-          const controller = new AbortController();
-          const fontTimeout = setTimeout(() => controller.abort(), 3000);
+          // 1. Try local font from public folder
           try {
-            const fetchRes = await fetch(fontUrl, { signal: controller.signal });
+            const localRes = await fetch(localFontUrl);
+            if (localRes.ok) {
+              res = localRes;
+              if (typeof window !== "undefined" && "caches" in window) {
+                try {
+                  const cache = await caches.open("product-images-v1");
+                  await cache.put(localFontUrl, res.clone());
+                } catch (cacheErr) {}
+              }
+            }
+          } catch (localErr) {
+            console.warn("Local font fetch failed, trying API route...", localErr);
+          }
+        }
+
+        if (!res) {
+          // 2. Try API font route
+          try {
+            const apiRes = await fetch(apiFontUrl);
+            if (apiRes.ok) {
+              res = apiRes;
+              if (typeof window !== "undefined" && "caches" in window) {
+                try {
+                  const cache = await caches.open("product-images-v1");
+                  await cache.put(apiFontUrl, res.clone());
+                } catch (cacheErr) {}
+              }
+            }
+          } catch (apiErr) {
+            console.warn("API font route fetch failed, trying CDN fallback...", apiErr);
+          }
+        }
+
+        if (!res) {
+          // 3. Fallback to Google Fonts CDN with 15-second timeout
+          const controller = new AbortController();
+          const fontTimeout = setTimeout(() => controller.abort(), 15000);
+          try {
+            const fetchRes = await fetch(cdnFallbackUrl, { signal: controller.signal });
             clearTimeout(fontTimeout);
             if (fetchRes.ok) {
               res = fetchRes;
               if (typeof window !== "undefined" && "caches" in window) {
                 try {
                   const cache = await caches.open("product-images-v1");
-                  await cache.put(fontUrl, res.clone());
+                  await cache.put(cdnFallbackUrl, res.clone());
                 } catch (cacheErr) {}
               }
             }
@@ -1017,7 +1056,9 @@ export default function App() {
           
           doc.addFileToVFS("NotoSansTC-Regular.ttf", base64Font);
           doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "normal");
-          doc.setFont("NotoSansTC");
+          // CRITICAL: Register "bold" style as well so jsPDF never falls back to Times-Bold (WinAnsiEncoding)
+          doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "bold");
+          doc.setFont("NotoSansTC", "normal");
           fontAdded = true;
         }
       } catch (err) {
@@ -1266,7 +1307,7 @@ export default function App() {
 
       doc.setFontSize(14);
       doc.setTextColor(226, 232, 240); // slate-200
-      doc.text(`Price Tier: ${selectedPriceTier} 系列`, 105, 120, { align: "center" });
+      doc.text(fontAdded ? `Price Tier: ${selectedPriceTier} 系列` : `Price Tier: ${selectedPriceTier}`, 105, 120, { align: "center" });
 
       const groupedCatalog = buildOrderedCatalogProducts(products, costCategories);
       const sortedProducts: Product[] = [];
@@ -1277,8 +1318,12 @@ export default function App() {
       doc.setFontSize(10);
       doc.setTextColor(148, 163, 184); // slate-400
       const nowStr = new Date().toLocaleDateString("zh-TW", { year: "numeric", month: "long", day: "numeric" });
-      doc.text(`產出日期: ${nowStr} | 共 ${sortedProducts.length} 款商品`, 105, 240, { align: "center" });
-      doc.text("支援完全離線查閱，隨時隨地，快速詢價", 105, 250, { align: "center" });
+      if (fontAdded) {
+        doc.text(`產出日期: ${nowStr} | 共 ${sortedProducts.length} 款商品`, 105, 240, { align: "center" });
+        doc.text("支援完全離線查閱，隨時隨地，快速詢價", 105, 250, { align: "center" });
+      } else {
+        doc.text(`Date: ${new Date().toISOString().slice(0, 10)} | Total ${sortedProducts.length} Products`, 105, 240, { align: "center" });
+      }
 
       // Parallel batch image resolver loop with real-time UI updates
       const processedProducts: { product: Product, imgData: string | null, format: string | null, width?: number, height?: number }[] = [];
@@ -1536,14 +1581,26 @@ export default function App() {
                   doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "F");
                   doc.setTextColor(148, 163, 184);
                   doc.setFontSize(8);
-                  doc.text("[ 圖片載入失敗 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
+                  if (fontAdded) {
+                    doc.setFont("NotoSansTC", "normal");
+                    doc.text("[ 圖片載入失敗 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
+                  } else {
+                    doc.setFont("helvetica", "normal");
+                    doc.text("[ Image Unavailable ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
+                  }
                 }
               } else {
                 doc.setFillColor(248, 250, 252);
                 doc.roundedRect(imgX_base, imgY_base, imgBoxW, imgBoxH, 1.5, 1.5, "F");
                 doc.setTextColor(148, 163, 184);
                 doc.setFontSize(8);
-                doc.text("[ 暫無圖片 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
+                if (fontAdded) {
+                  doc.setFont("NotoSansTC", "normal");
+                  doc.text("[ 暫無圖片 ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
+                } else {
+                  doc.setFont("helvetica", "normal");
+                  doc.text("[ No Image ]", cx + (cardW / 2), imgY_base + (imgBoxH / 2), { align: "center" });
+                }
               }
 
               // 2.1 Diagonal Strike Line for Out-of-Stock Items
@@ -1555,7 +1612,7 @@ export default function App() {
 
               // 3. Price Tag hovering at Bottom LEFT Corner of Image (Significantly Larger & Bolder)
               const priceVal = parseFloat(getProductPrice(p));
-              const priceStr = priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : "請詢價";
+              const priceStr = priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : (fontAdded ? "請詢價" : "Inquire");
 
               doc.setFontSize(10.5);
               if (fontAdded) {
@@ -2010,6 +2067,7 @@ export default function App() {
         updatedAllValues.push("");
       }
       updatedAllValues[2] = editProductName.trim();
+      updatedAllValues[12] = editProductRemarks.trim();
       updatedAllValues[14] = finalPrice;
       updatedAllValues[17] = finalPriceA;
       updatedAllValues[18] = finalPriceB;
@@ -2030,6 +2088,7 @@ export default function App() {
         secondaryStockCount: isNaN(qtyNumber) ? "" : qtyNumber.toString(),
         extraAttributes: {
           ...selectedProduct.extraAttributes,
+          "Categories": editProductRemarks.trim() || selectedProduct.extraAttributes?.["Categories"] || "",
           "Merchant Remark": editProductRemarks.trim(),
           "remarks": editProductRemarks.trim(),
           "show on pdf": showPdfStr
@@ -2052,7 +2111,13 @@ export default function App() {
     setEditProductPriceB(selectedProduct.priceB !== undefined && selectedProduct.priceB !== "" ? selectedProduct.priceB : (selectedProduct.price || ""));
     setEditProductPriceC(selectedProduct.priceC !== undefined && selectedProduct.priceC !== "" ? selectedProduct.priceC : (selectedProduct.price || ""));
     setEditProductQuantity(selectedProduct.alwaysStock ? "" : (selectedProduct.secondaryStockCount || ""));
-    setEditProductRemarks(selectedProduct.extraAttributes?.["Merchant Remark"] || selectedProduct.extraAttributes?.["remarks"] || "");
+    setEditProductRemarks(
+      selectedProduct.extraAttributes?.["Merchant Remark"] || 
+      selectedProduct.extraAttributes?.["remarks"] || 
+      (selectedProduct.allValues ? selectedProduct.allValues[12] : "") || 
+      selectedProduct.extraAttributes?.["Categories"] || 
+      ""
+    );
     setEditProductImageFile(null);
     setEditProductImagePreview(""); // resets preview
 
@@ -5353,7 +5418,7 @@ function doPost(e) {
       
       sheet.getRange(rowToUpdate, 28).setValue(abVal); // Col AB: UnlimitedStock
       sheet.getRange(rowToUpdate, 29).setValue(acVal); // Col AC: Stock / 庫存
-      sheet.getRange(rowToUpdate, 30).setValue(remarks || ""); // Col AD: Remarks
+      sheet.getRange(rowToUpdate, 13).setValue(remarks || ""); // Col M: Categories / 備註
       
       var showOnPdf = param.showOnPdf;
       if (showOnPdf !== undefined && showOnPdf !== "") {
