@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { jsPDF } from "jspdf";
 import { 
   Search, 
@@ -451,6 +451,39 @@ export default function App() {
 
   // Filter States
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const searchScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const scrollToAdminResults = () => {
+    const el = document.getElementById("admin-product-database-table");
+    if (el) {
+      const header = document.getElementById("admin-header");
+      const headerHeight = header ? header.offsetHeight : 105;
+      const targetPosition = el.getBoundingClientRect().top + window.pageYOffset - headerHeight - 16;
+      
+      const currentTop = el.getBoundingClientRect().top;
+      // If table top is already nicely positioned under the header, avoid redundant jumping
+      if (Math.abs(currentTop - (headerHeight + 16)) > 35) {
+        window.scrollTo({
+          top: Math.max(0, targetPosition),
+          behavior: "smooth"
+        });
+      }
+    }
+  };
+
+  const handleAdminSearchChange = (value: string) => {
+    setSearchQuery(value);
+    setCurrentPage(1);
+
+    if (value.trim().length > 0) {
+      if (searchScrollTimeoutRef.current) {
+        clearTimeout(searchScrollTimeoutRef.current);
+      }
+      searchScrollTimeoutRef.current = setTimeout(() => {
+        scrollToAdminResults();
+      }, 140);
+    }
+  };
   const [selectedParentCategory, setSelectedParentCategory] = useState<string>("All");
   const [selectedSubCategory, setSelectedSubCategory] = useState<string>("All");
   const [selectedCostCategoryName, setSelectedCostCategoryName] = useState<string>("All");
@@ -2744,62 +2777,101 @@ export default function App() {
         <>
           {/* Admin Header */}
           <header id="admin-header" className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-slate-100 z-30 transition-all shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-            <div className="max-w-7xl mx-auto px-4 md:px-6 h-16 flex items-center justify-between">
+            <div className="max-w-7xl mx-auto px-4 md:px-6 py-2.5 space-y-2">
               
-              {/* Logo & Connected Title */}
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center shadow-lg shadow-slate-200">
-                  <Settings className="w-5 h-5 text-white animate-spin-slow" style={{ animationDuration: '12s' }} />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h1 className="font-bold text-base text-slate-900 tracking-tight leading-none md:text-lg">
-                      Salestable
-                    </h1>
-                    {syncTime && (
-                      <span className="text-[10px] font-bold text-slate-500 bg-slate-100 border border-slate-200 rounded-lg px-2 py-0.5" title="最後刷新時間">
-                        最後刷新: {syncTime}
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-[11px] text-indigo-650 font-bold block mt-1">
-                    Google 表格實時同步
-                  </span>
-                </div>
+              {/* 1st Row: Product Search Text Box */}
+              <div className="relative w-full">
+                <input
+                  type="text"
+                  placeholder="搜尋資料庫記錄..."
+                  value={searchQuery}
+                  onChange={(e) => handleAdminSearchChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      scrollToAdminResults();
+                    }
+                  }}
+                  onFocus={() => {
+                    if (searchQuery.trim().length > 0) {
+                      scrollToAdminResults();
+                    }
+                  }}
+                  className="w-full bg-slate-50 border border-slate-200 hover:bg-slate-100/70 focus:bg-white text-slate-900 focus:border-indigo-400 text-xs sm:text-sm rounded-xl pl-9 pr-8 py-2 sm:py-2.5 outline-none transition-all font-semibold shadow-xs"
+                />
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 sm:top-3 pointer-events-none" />
+                {searchQuery && (
+                  <button
+                    onClick={() => {
+                      setSearchQuery("");
+                      setCurrentPage(1);
+                    }}
+                    className="absolute right-2.5 top-2 sm:top-2.5 p-1 text-slate-400 hover:text-slate-600 rounded-md cursor-pointer transition-colors"
+                    title="清除搜尋"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
 
-              {/* Present Catalog button, Download Salestable button & Lock System Button */}
-              <div className="flex items-center gap-2 sm:gap-3">
-                <button
-                  onClick={handleGenerateJsPdf}
-                  disabled={isGeneratingPdf}
-                  className="px-3.5 sm:px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-md shadow-indigo-100 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer disabled:opacity-60 shrink-0"
-                  title="下載 Salestable PDF 圖冊"
-                >
-                  {isGeneratingPdf ? (
-                    <RefreshCw className="w-4 h-4 animate-spin text-white" />
-                  ) : (
-                    <Download className="w-4 h-4 text-white" />
-                  )}
-                  <span>{isGeneratingPdf ? "Generating..." : "Download Salestable"}</span>
-                </button>
+              {/* 2nd Row: The Others (Salestable Title, Logo, Status, and Action Buttons) */}
+              <div className="flex items-center justify-between gap-3">
+                {/* Logo & Salestable Title */}
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-slate-900 flex items-center justify-center shadow-md shadow-slate-200 shrink-0">
+                    <Settings className="w-4.5 h-4.5 text-white animate-spin-slow" style={{ animationDuration: '12s' }} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h1 className="font-bold text-base text-slate-900 tracking-tight leading-none md:text-lg">
+                        Salestable
+                      </h1>
+                      {syncTime && (
+                        <span className="hidden sm:inline-block text-[10px] font-bold text-slate-500 bg-slate-100 border border-slate-200 rounded-lg px-2 py-0.5" title="最後刷新時間">
+                          最後刷新: {syncTime}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-indigo-650 font-bold block mt-0.5">
+                      Google 表格實時同步
+                    </span>
+                  </div>
+                </div>
 
-                <button
-                  onClick={handleLogout}
-                  className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                  title="登出並鎖定系統"
-                >
-                  <LogOut className="w-4 h-4 text-slate-500" />
-                  <span className="hidden sm:inline">鎖定系統</span>
-                </button>
-                <button
-                  onClick={() => setViewMode("customer")}
-                  className="px-4 sm:px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md shadow-emerald-100 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] animate-pulse hover:animate-none"
-                  title="展示用戶端商品圖冊和詢價下單流程"
-                >
-                  <Eye className="w-4 h-4 text-white" />
-                  <span>向客戶展示產品目錄</span>
-                </button>
+                {/* Present Catalog button, Download Salestable button & Lock System Button */}
+                <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                  <button
+                    onClick={handleGenerateJsPdf}
+                    disabled={isGeneratingPdf}
+                    className="px-3 sm:px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-md shadow-indigo-100 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer disabled:opacity-60 shrink-0"
+                    title="下載 Salestable PDF 圖冊"
+                  >
+                    {isGeneratingPdf ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
+                    ) : (
+                      <Download className="w-3.5 h-3.5 text-white" />
+                    )}
+                    <span className="hidden sm:inline">{isGeneratingPdf ? "Generating..." : "Download Salestable"}</span>
+                    <span className="sm:hidden">PDF</span>
+                  </button>
+
+                  <button
+                    onClick={handleLogout}
+                    className="p-2 sm:px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+                    title="登出並鎖定系統"
+                  >
+                    <LogOut className="w-3.5 h-3.5 text-slate-500" />
+                    <span className="hidden sm:inline">鎖定系統</span>
+                  </button>
+                  <button
+                    onClick={() => setViewMode("customer")}
+                    className="px-3.5 sm:px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md shadow-emerald-100 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] shrink-0"
+                    title="展示用戶端商品圖冊和詢價下單流程"
+                  >
+                    <Eye className="w-3.5 h-3.5 text-white" />
+                    <span className="hidden sm:inline">向客戶展示產品目錄</span>
+                    <span className="sm:hidden">展示目錄</span>
+                  </button>
+                </div>
               </div>
 
             </div>
@@ -3040,23 +3112,33 @@ export default function App() {
               </div>
 
               {/* Right Column: Database list with search & editing */}
-              <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-4 overflow-hidden animate-fadeIn">
+              <div 
+                id="admin-product-database-table"
+                className="scroll-mt-36 lg:col-span-2 bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-4 overflow-hidden animate-fadeIn"
+              >
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
                     <h3 className="font-black text-slate-900 text-sm tracking-tight">在線商品資料記錄 (Live)</h3>
                     <p className="text-[11px] text-slate-400">檢索資料庫商品。可在此直接編輯屬性或替換關聯商品圖片。</p>
                   </div>
                   
-                  {/* Local Quick Search input on dashboard list */}
-                  <div className="relative max-w-xs w-full">
-                    <input
-                      type="text"
-                      placeholder="搜尋資料庫記錄..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 focus:bg-white text-slate-900 focus:border-indigo-400 text-xs rounded-xl pl-8 pr-3 py-2 outline-none transition-all font-semibold"
-                    />
-                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs font-bold text-slate-600 bg-slate-100 border border-slate-200/80 px-2.5 py-1 rounded-lg">
+                      共 {processedProducts.length} 款商品
+                    </span>
+                    {searchQuery && (
+                      <button
+                        onClick={() => {
+                          setSearchQuery("");
+                          setCurrentPage(1);
+                        }}
+                        className="text-xs text-indigo-600 hover:text-indigo-800 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                        title="清除搜尋過濾"
+                      >
+                        <span className="max-w-[120px] truncate">搜尋: &ldquo;{searchQuery}&rdquo;</span>
+                        <X className="w-3 h-3 shrink-0" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -5463,21 +5545,48 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     
-    // 3. Action: writeTradeLog (Supports INSERT and UPDATE)
+    // 3. Action: writeTradeLog (Supports Trade_Log & Trade_log_admin for Admin orders, with automatic stock deduction)
     if (action === 'writeTradeLog') {
-      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Trade_Log');
-      if (!sheet) {
-        return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'Trade_Log sheet not found' }))
-          .setMimeType(ContentService.MimeType.JSON);
-      }
-      
       var rows = param.rows; // Array of arrays representing the rows
       if (!rows || rows.length === 0) {
         return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'No rows sent' }))
           .setMimeType(ContentService.MimeType.JSON);
       }
+
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+      // Determine target sheet (Admin orders go to Trade_log_admin if requested or user is admin)
+      var isTargetAdmin = false;
+      if (param.targetSheet === 'Trade_log_admin' || param.isAdmin === true) {
+        isTargetAdmin = true;
+      } else if (rows[0] && rows[0].length > 10) {
+        var userCol = (rows[0][10] || '').toString().trim().toLowerCase();
+        if (userCol === 'admin') {
+          isTargetAdmin = true;
+        }
+      }
+
+      var sheet;
+      var targetSheetName;
+      if (isTargetAdmin) {
+        targetSheetName = 'Trade_log_admin';
+        sheet = ss.getSheetByName('Trade_log_admin') || 
+                ss.getSheetByName('Trade_Log_admin') || 
+                ss.getSheetByName('trade_log_admin');
+        if (!sheet) {
+          sheet = ss.insertSheet('Trade_log_admin');
+        }
+      } else {
+        targetSheetName = 'Trade_Log';
+        sheet = ss.getSheetByName('Trade_Log') || 
+                ss.getSheetByName('trade_log') || 
+                ss.getSheetByName('交易記錄');
+        if (!sheet) {
+          sheet = ss.getSheetByName('Trade_Log') || ss.getSheets()[0];
+        }
+      }
       
-      // Ensure the sheet has enough columns to hold our 13-column wide schema
+      // Ensure the sheet has enough columns to hold our schema
       var maxCols = sheet.getMaxColumns();
       var neededCols = Math.max(13, rows[0].length);
       if (maxCols < neededCols) {
@@ -5496,15 +5605,12 @@ function doPost(e) {
         }
       }
 
-      // Revert stock of previous matching rows in Trade_Log before applying new subtractions
+      // Revert stock of previous matching rows in Trade_Log / Trade_log_admin before applying new subtractions
       revertStockForOrders(incomingIds);
       
       // Update stock quantities in the 'raw' sheet, Col AC
       try {
-        var rawSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('raw');
-        if (!rawSheet) {
-          rawSheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
-        }
+        var rawSheet = ss.getSheetByName('raw') || ss.getSheets()[0];
         if (rawSheet) {
           var rawValues = rawSheet.getDataRange().getValues();
           var rawHeaderRowIdx = 0;
@@ -5588,71 +5694,69 @@ function doPost(e) {
         console.error('Error updating stock in raw sheet:', stockError);
       }
       
-      // Delete existing rows with these matching order IDs in Column M (13th column)
+      // Delete existing rows with these matching order IDs in Column M (13th column) across all trade log sheets
       var uniqueIdsToDelete = Object.keys(incomingIds);
       if (uniqueIdsToDelete.length > 0) {
-        var lastRow = sheet.getLastRow();
-        if (lastRow > 1) {
-          // Fetch Col M (Column 13) values (from row 2 to lastRow)
-          var colMValues = sheet.getRange(2, 13, lastRow - 1, 1).getValues();
-          
-          // Iterate backward to avoid row index shifting during deletion
-          for (var r = lastRow; r >= 2; r--) {
-            var cellValue = colMValues[r - 2][0];
-            if (cellValue && incomingIds[cellValue.toString().trim()]) {
-              sheet.deleteRow(r);
+        var logSheetsToClean = ['Trade_Log', 'trade_log', '交易記錄', 'Trade_log_admin', 'Trade_Log_admin', 'trade_log_admin'];
+        logSheetsToClean.forEach(function(sName) {
+          var targetLogSheet = ss.getSheetByName(sName);
+          if (targetLogSheet) {
+            var lastRow = targetLogSheet.getLastRow();
+            if (lastRow > 1) {
+              var colMValues = targetLogSheet.getRange(2, 13, lastRow - 1, 1).getValues();
+              for (var r = lastRow; r >= 2; r--) {
+                var cellValue = colMValues[r - 2][0];
+                if (cellValue && incomingIds[cellValue.toString().trim()]) {
+                  targetLogSheet.deleteRow(r);
+                }
+              }
             }
           }
-        }
+        });
       }
       
-      // Append the new rows to the Trade_Log sheet
+      // Append the new rows to the target trade log sheet
       sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
       
-      return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'Trade log written/edited successfully' }))
-        .setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({ 
+        status: 'success', 
+        message: 'Trade log written/edited successfully in ' + targetSheetName 
+      })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // 3.5 Action: deleteOrder (Delete matching rows by Order ID in Column M)
+    // 3.5 Action: deleteOrder (Delete matching rows by Order ID in Column M & restore stock)
     if (action === 'deleteOrder') {
-      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Trade_Log');
-      if (!sheet) {
-        return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'Trade_Log sheet not found' }))
-          .setMimeType(ContentService.MimeType.JSON);
-      }
-      
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
       var orderId = param.orderId;
       if (!orderId) {
         return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: 'No orderId provided' }))
           .setMimeType(ContentService.MimeType.JSON);
       }
 
-      // Revert stock for this order ID before deletion from Trade_Log
+      // Revert stock for this order ID before deletion from Trade_Log & Trade_log_admin
       var deleteMap = {};
       deleteMap[orderId.toString().trim()] = true;
       revertStockForOrders(deleteMap);
       
-      // Ensure the sheet has enough columns to hold our 13-column wide schema
-      var maxCols = sheet.getMaxColumns();
-      if (maxCols < 13) {
-        sheet.insertColumnsAfter(maxCols, 13 - maxCols);
-      }
-      
-      var lastRow = sheet.getLastRow();
+      var logSheetsToCheck = ['Trade_Log', 'trade_log', '交易記錄', 'Trade_log_admin', 'Trade_Log_admin', 'trade_log_admin'];
       var deletedCount = 0;
-      if (lastRow > 1) {
-        // Fetch Col M (Column 13) values (from row 2 onwards)
-        var colMValues = sheet.getRange(2, 13, lastRow - 1, 1).getValues();
-        
-        // Iterate backward to avoid row index shifting during deletion
-        for (var r = lastRow; r >= 2; r--) {
-          var cellValue = colMValues[r - 2][0];
-          if (cellValue && cellValue.toString().trim() === orderId.toString().trim()) {
-            sheet.deleteRow(r);
-            deletedCount++;
+      
+      logSheetsToCheck.forEach(function(sName) {
+        var s = ss.getSheetByName(sName);
+        if (s) {
+          var lastRow = s.getLastRow();
+          if (lastRow > 1) {
+            var colMValues = s.getRange(2, 13, lastRow - 1, 1).getValues();
+            for (var r = lastRow; r >= 2; r--) {
+              var cellValue = colMValues[r - 2][0];
+              if (cellValue && cellValue.toString().trim() === orderId.toString().trim()) {
+                s.deleteRow(r);
+                deletedCount++;
+              }
+            }
           }
         }
-      }
+      });
       
       return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'Deleted ' + deletedCount + ' rows for order ID ' + orderId }))
         .setMimeType(ContentService.MimeType.JSON);
@@ -5858,52 +5962,59 @@ function doGet(e) {
 
 function revertStockForOrders(orderIdsMap) {
   try {
-    var rawSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('raw');
-    if (!rawSheet) {
-      rawSheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
-    }
-    var tradeLogSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Trade_Log');
-    if (rawSheet && tradeLogSheet) {
-      var rawValues = rawSheet.getDataRange().getValues();
-      var rawHeaderRowIdx = 0;
-      var rawTitleIdx = 2; // Col C default
-      var rawUnlimitedIdx = 27; // Col AB default
-      var rawStockIdx = 28; // Col AC default
-      
-      for (var i = 0; i < Math.min(rawValues.length, 10); i++) {
-        var row = rawValues[i];
-        var foundIdx = -1;
-        for (var j = 0; j < row.length; j++) {
-          if (row[j] && row[j].toString().toLowerCase().trim() === 'title') {
-            foundIdx = j;
-            break;
-          }
-        }
-        if (foundIdx !== -1) {
-          rawHeaderRowIdx = i;
-          rawTitleIdx = foundIdx;
-          for (var j = 0; j < row.length; j++) {
-            var cellStr = (row[j] || '').toString().toLowerCase().trim();
-            var normed = cellStr.replace(/[\\s_-]/g, '');
-            if (normed.indexOf('unlimitedstock') !== -1) rawUnlimitedIdx = j;
-            else if (normed === 'stock' || cellStr.indexOf('庫存') !== -1) rawStockIdx = j;
-          }
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var rawSheet = ss.getSheetByName('raw') || ss.getSheets()[0];
+    if (!rawSheet) return;
+
+    var logSheetsToCheck = ['Trade_Log', 'trade_log', '交易記錄', 'Trade_log_admin', 'Trade_Log_admin', 'trade_log_admin'];
+    var tradeLogSheets = [];
+    logSheetsToCheck.forEach(function(sName) {
+      var s = ss.getSheetByName(sName);
+      if (s) tradeLogSheets.push(s);
+    });
+    if (tradeLogSheets.length === 0) return;
+
+    var rawValues = rawSheet.getDataRange().getValues();
+    var rawHeaderRowIdx = 0;
+    var rawTitleIdx = 2; // Col C default
+    var rawUnlimitedIdx = 27; // Col AB default
+    var rawStockIdx = 28; // Col AC default
+    
+    for (var i = 0; i < Math.min(rawValues.length, 10); i++) {
+      var row = rawValues[i];
+      var foundIdx = -1;
+      for (var j = 0; j < row.length; j++) {
+        if (row[j] && row[j].toString().toLowerCase().trim() === 'title') {
+          foundIdx = j;
           break;
         }
       }
-
-      // Create index of product name to row index
-      var prodToIndex = {};
-      for (var rIdx = rawHeaderRowIdx + 1; rIdx < rawValues.length; rIdx++) {
-        var pName = rawValues[rIdx][rawTitleIdx];
-        if (pName && pName.toString().trim()) {
-          prodToIndex[pName.toString().trim()] = rIdx;
+      if (foundIdx !== -1) {
+        rawHeaderRowIdx = i;
+        rawTitleIdx = foundIdx;
+        for (var j = 0; j < row.length; j++) {
+          var cellStr = (row[j] || '').toString().toLowerCase().trim();
+          var normed = cellStr.replace(/[\\s_-]/g, '');
+          if (normed.indexOf('unlimitedstock') !== -1) rawUnlimitedIdx = j;
+          else if (normed === 'stock' || cellStr.indexOf('庫存') !== -1) rawStockIdx = j;
         }
+        break;
       }
+    }
 
-      var lastRow = tradeLogSheet.getLastRow();
+    // Create index of product name to row index
+    var prodToIndex = {};
+    for (var rIdx = rawHeaderRowIdx + 1; rIdx < rawValues.length; rIdx++) {
+      var pName = rawValues[rIdx][rawTitleIdx];
+      if (pName && pName.toString().trim()) {
+        prodToIndex[pName.toString().trim()] = rIdx;
+      }
+    }
+
+    tradeLogSheets.forEach(function(tSheet) {
+      var lastRow = tSheet.getLastRow();
       if (lastRow > 1) {
-        var tradeLogValues = tradeLogSheet.getRange(1, 1, lastRow, 13).getValues();
+        var tradeLogValues = tSheet.getRange(1, 1, lastRow, 13).getValues();
         for (var r = 1; r < lastRow; r++) {
           var logRow = tradeLogValues[r];
           if (logRow.length < 13) continue;
@@ -5944,7 +6055,7 @@ function revertStockForOrders(orderIdsMap) {
           }
         }
       }
-    }
+    });
   } catch (err) {
     console.error('Error in reverting stock:', err);
   }
