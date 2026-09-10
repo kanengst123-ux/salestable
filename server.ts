@@ -558,6 +558,44 @@ function getSheetSettings() {
   };
 }
 
+// Purchase tab change log persistence
+const PURCHASES_FILE = path.join(process.cwd(), "purchases_backup.json");
+
+interface PurchaseLog {
+  id: string;
+  date: string;
+  product: string;
+  quantityFrom: string | number;
+  quantityTo: string | number;
+  net: number;
+}
+
+function getPurchases(): PurchaseLog[] {
+  try {
+    if (fs.existsSync(PURCHASES_FILE)) {
+      const data = fs.readFileSync(PURCHASES_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error("Failed to read purchases log:", error);
+  }
+  return [];
+}
+
+function savePurchases(records: PurchaseLog[]) {
+  try {
+    fs.writeFileSync(PURCHASES_FILE, JSON.stringify(records, null, 2));
+  } catch (error) {
+    console.error("Failed to save purchases log:", error);
+  }
+}
+
+function addPurchaseRecord(record: PurchaseLog) {
+  const records = getPurchases();
+  records.unshift(record); // newest first
+  savePurchases(records);
+}
+
 function saveSheetSettings(settings: any) {
   try {
     fs.writeFileSync(SHEET_SETTINGS_FILE, JSON.stringify(settings, null, 2));
@@ -566,16 +604,56 @@ function saveSheetSettings(settings: any) {
   }
 }
 
-async function triggerSheetsSync(id: string, name: string, price: string, quantity: string, remarks: string, action: string = "addProduct", priceA?: string, priceB?: string, priceC?: string, categorySymbol?: string, showOnPdf?: string) {
+async function triggerSheetsSync(
+  id: string, 
+  name: string, 
+  price: string, 
+  quantity: string, 
+  remarks: string, 
+  action: string = "addProduct", 
+  priceA?: string, 
+  priceB?: string, 
+  priceC?: string, 
+  categorySymbol?: string, 
+  showOnPdf?: string,
+  stockChanged?: boolean,
+  quantityFrom?: string | number,
+  quantityTo?: string | number,
+  net?: number,
+  date?: string
+) {
   const settings = getSheetSettings();
   if (settings.enabled && settings.appsScriptUrl) {
     try {
-      console.log(`[triggerSheetsSync] Sync payload details:`, { action, id, name, price, quantity, remarks, priceA, priceB, priceC, categorySymbol, showOnPdf });
+      const payload: any = { 
+        action, 
+        id, 
+        name, 
+        price, 
+        quantity, 
+        remarks, 
+        priceA, 
+        priceB, 
+        priceC, 
+        categorySymbol, 
+        showOnPdf 
+      };
+
+      // Include stock change log fields for 'Purchase' tab if stock level was changed
+      if (stockChanged) {
+        payload.stockChanged = true;
+        payload.quantityFrom = quantityFrom;
+        payload.quantityTo = quantityTo;
+        payload.net = net;
+        payload.date = date || new Date().toLocaleString("zh-HK", { hour12: false });
+      }
+
+      console.log(`[triggerSheetsSync] Sync payload details:`, payload);
       // Use dynamic import for fetch if needed, but since NodeJS 18 has global fetch, we call it directly
       const response = await fetch(settings.appsScriptUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, id, name, price, quantity, remarks, priceA, priceB, priceC, categorySymbol, showOnPdf })
+        body: JSON.stringify(payload)
       });
       const responseText = await response.text();
       console.log("Apps Script response:", responseText);
@@ -590,6 +668,31 @@ app.use(express.json({ limit: "100mb" }));
 
 app.get("/api/sheet-settings", (req, res) => {
   res.json(getSheetSettings());
+});
+
+app.get("/api/purchases", (req, res) => {
+  res.json(getPurchases());
+});
+
+app.post("/api/purchases", (req, res) => {
+  try {
+    const { date, product, quantityFrom, quantityTo, net } = req.body;
+    if (!product) {
+      return res.status(400).json({ error: "Product name is required" });
+    }
+    const record: PurchaseLog = {
+      id: `pur-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      date: date || new Date().toLocaleString("zh-HK", { hour12: false }),
+      product,
+      quantityFrom: quantityFrom !== undefined ? quantityFrom : 0,
+      quantityTo: quantityTo !== undefined ? quantityTo : 0,
+      net: net !== undefined ? net : ((Number(quantityTo) || 0) - (Number(quantityFrom) || 0))
+    };
+    addPurchaseRecord(record);
+    res.json({ success: true, record });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post("/api/sheet-settings", (req, res) => {
@@ -830,8 +933,8 @@ app.post("/api/products", async (req, res) => {
 app.put("/api/products/:id", (req, res) => {
   try {
     const { id } = req.params;
-    const { name, price, priceA, priceB, priceC, quantity, remarks, base64Image, showOnPdf } = req.body;
-    console.log(`[PUT /api/products/${id}] Received body:`, { name, price, priceA, priceB, priceC, quantity, remarks, showOnPdf });
+    const { name, price, priceA, priceB, priceC, quantity, remarks, base64Image, showOnPdf, stockChanged, quantityFrom, quantityTo, net, changeDate } = req.body;
+    console.log(`[PUT /api/products/${id}] Received body:`, { name, price, priceA, priceB, priceC, quantity, remarks, showOnPdf, stockChanged, quantityFrom, quantityTo, net });
     if (!name) {
       return res.status(400).json({ error: "Name is required" });
     }
@@ -862,6 +965,69 @@ app.put("/api/products/:id", (req, res) => {
 
     let localProducts = getLocalProducts();
     const existingIndex = localProducts.findIndex((p: any) => p.id === id);
+
+    // Retrieve previous stock info to calculate change
+    let previousStockDisplay: string | number = "長期充足";
+    let prevNumericStock = 0;
+    const existingProduct = existingIndex !== -1 
+      ? localProducts[existingIndex] 
+      : (productsCache.find((p: any) => p.id === id) || (fs.existsSync("products_backup.json") ? (() => {
+          try {
+            return JSON.parse(fs.readFileSync("products_backup.json", "utf-8")).find((p: any) => p.id === id);
+          } catch {
+            return null;
+          }
+        })() : null));
+
+    if (existingProduct) {
+      if (!existingProduct.alwaysStock && existingProduct.secondaryStockCount !== "" && existingProduct.secondaryStockCount !== undefined) {
+        previousStockDisplay = !isNaN(Number(existingProduct.secondaryStockCount)) ? Number(existingProduct.secondaryStockCount) : existingProduct.secondaryStockCount;
+        prevNumericStock = parseFloat(existingProduct.secondaryStockCount) || 0;
+      } else if (existingProduct.hasStock === false) {
+        previousStockDisplay = 0;
+        prevNumericStock = 0;
+      } else {
+        previousStockDisplay = "長期充足";
+        prevNumericStock = 0;
+      }
+    }
+
+    const newStockDisplay: string | number = alwaysStock ? "長期充足" : (isNaN(qtyNumber) ? quantity : qtyNumber);
+    const newNumericStock = isNaN(qtyNumber) ? 0 : qtyNumber;
+
+    // Detect if stock changed
+    const isStockChanged = stockChanged !== undefined 
+      ? !!stockChanged 
+      : (quantityFrom !== undefined && quantityTo !== undefined 
+          ? String(quantityFrom).trim() !== String(quantityTo).trim()
+          : String(previousStockDisplay).trim() !== String(newStockDisplay).trim());
+
+    const finalQuantityFrom = quantityFrom !== undefined ? quantityFrom : previousStockDisplay;
+    const finalQuantityTo = quantityTo !== undefined ? quantityTo : newStockDisplay;
+    const finalNet = net !== undefined ? Number(net) : (newNumericStock - prevNumericStock);
+    const recordDate = changeDate || new Date().toLocaleString("zh-HK", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    }).replace(/\//g, "-");
+
+    // Record into 'Purchase' log if stock changed
+    if (isStockChanged) {
+      const purchaseRecord: PurchaseLog = {
+        id: `pur-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        date: recordDate,
+        product: name,
+        quantityFrom: finalQuantityFrom,
+        quantityTo: finalQuantityTo,
+        net: finalNet
+      };
+      addPurchaseRecord(purchaseRecord);
+      console.log(`[Purchase Log Added]:`, purchaseRecord);
+    }
 
     if (existingIndex !== -1) {
       const updatedAllValues = [...(localProducts[existingIndex].allValues || [])];
@@ -952,8 +1118,25 @@ app.put("/api/products/:id", (req, res) => {
 
     saveLocalProducts(localProducts);
 
-    // Sync to Google Sheet if enabled
-    triggerSheetsSync(id, name, finalPrice, quantity, remarks || "", "updateProduct", finalPriceA, finalPriceB, finalPriceC, undefined, showOnPdfVal);
+    // Sync to Google Sheet if enabled, including Purchase tab log if stock changed
+    triggerSheetsSync(
+      id, 
+      name, 
+      finalPrice, 
+      quantity, 
+      remarks || "", 
+      "updateProduct", 
+      finalPriceA, 
+      finalPriceB, 
+      finalPriceC, 
+      undefined, 
+      showOnPdfVal,
+      isStockChanged,
+      finalQuantityFrom,
+      finalQuantityTo,
+      finalNet,
+      recordDate
+    );
 
     res.json({ success: true, message: "Product updated successfully" });
   } catch (error: any) {
