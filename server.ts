@@ -930,6 +930,160 @@ app.post("/api/products", async (req, res) => {
   }
 });
 
+// Batch Inbound Restock endpoint (來貨記錄)
+app.post("/api/products/batch-restock", async (req, res) => {
+  try {
+    const { items } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "Items array is required" });
+    }
+
+    let localProducts = getLocalProducts();
+    const updatedProducts: any[] = [];
+    const addedPurchases: PurchaseLog[] = [];
+
+    const nowFormatted = new Date().toLocaleString("zh-HK", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    }).replace(/\//g, "-");
+
+    for (const item of items) {
+      const { id, name, addQuantity, changeDate } = item;
+      const addNum = parseInt(addQuantity, 10);
+      if (isNaN(addNum) || addNum <= 0) continue;
+
+      const existingIndex = localProducts.findIndex((p: any) => p.id === id);
+      let existingProduct = existingIndex !== -1 ? localProducts[existingIndex] : null;
+
+      if (!existingProduct) {
+        existingProduct = productsCache.find((p: any) => p.id === id);
+        if (!existingProduct && fs.existsSync("products_backup.json")) {
+          try {
+            const backup = JSON.parse(fs.readFileSync("products_backup.json", "utf-8"));
+            existingProduct = backup.find((p: any) => p.id === id);
+          } catch {}
+        }
+      }
+
+      // Calculate previous stock
+      let previousStockDisplay: string | number = "長期充足";
+      let prevNumericStock = 0;
+      if (existingProduct) {
+        if (!existingProduct.alwaysStock && existingProduct.secondaryStockCount !== "" && existingProduct.secondaryStockCount !== undefined) {
+          previousStockDisplay = !isNaN(Number(existingProduct.secondaryStockCount)) ? Number(existingProduct.secondaryStockCount) : existingProduct.secondaryStockCount;
+          prevNumericStock = parseFloat(existingProduct.secondaryStockCount) || 0;
+        } else if (existingProduct.hasStock === false) {
+          previousStockDisplay = 0;
+          prevNumericStock = 0;
+        } else {
+          previousStockDisplay = "長期充足";
+          prevNumericStock = 0;
+        }
+      }
+
+      const newNumericStock = prevNumericStock + addNum;
+      const newStockDisplay = newNumericStock;
+      const finalQuantityFrom = item.quantityFrom !== undefined ? item.quantityFrom : previousStockDisplay;
+      const finalQuantityTo = item.quantityTo !== undefined ? item.quantityTo : newStockDisplay;
+      const finalNet = item.net !== undefined ? Number(item.net) : addNum;
+      const recordDate = changeDate || nowFormatted;
+
+      // Create purchase record
+      const purchaseRecord: PurchaseLog = {
+        id: `pur-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        date: recordDate,
+        product: name || existingProduct?.name || id,
+        quantityFrom: finalQuantityFrom,
+        quantityTo: finalQuantityTo,
+        net: finalNet
+      };
+      addPurchaseRecord(purchaseRecord);
+      addedPurchases.push(purchaseRecord);
+
+      // Update product record
+      const finalPrice = existingProduct?.price || "0";
+      const finalPriceA = existingProduct?.priceA || finalPrice;
+      const finalPriceB = existingProduct?.priceB || finalPrice;
+      const finalPriceC = existingProduct?.priceC || finalPrice;
+      const remarks = existingProduct?.extraAttributes?.["Merchant Remark"] || existingProduct?.extraAttributes?.["remarks"] || existingProduct?.extraAttributes?.["Categories"] || "";
+      const showOnPdf = existingProduct?.extraAttributes?.["show on pdf"] || "0";
+
+      if (existingIndex !== -1) {
+        const updatedAllValues = [...(localProducts[existingIndex].allValues || [])];
+        while (updatedAllValues.length < 31) updatedAllValues.push("");
+        updatedAllValues[27] = "0"; // not unlimited anymore
+        updatedAllValues[28] = newNumericStock.toString();
+        localProducts[existingIndex] = {
+          ...localProducts[existingIndex],
+          hasStock: true,
+          alwaysStock: false,
+          secondaryStockCount: newNumericStock.toString(),
+          allValues: updatedAllValues
+        };
+        updatedProducts.push(localProducts[existingIndex]);
+      } else {
+        const updatedAllValues = [...(existingProduct?.allValues || [])];
+        while (updatedAllValues.length < 31) updatedAllValues.push("");
+        updatedAllValues[27] = "0";
+        updatedAllValues[28] = newNumericStock.toString();
+
+        const updated = {
+          ...(existingProduct || {}),
+          id,
+          name: name || existingProduct?.name || id,
+          price: finalPrice,
+          priceA: finalPriceA,
+          priceB: finalPriceB,
+          priceC: finalPriceC,
+          hasStock: true,
+          alwaysStock: false,
+          secondaryStockCount: newNumericStock.toString(),
+          allValues: updatedAllValues
+        };
+        localProducts.unshift(updated);
+        updatedProducts.push(updated);
+      }
+
+      // Sync to Google Sheet if enabled
+      triggerSheetsSync(
+        id,
+        name || existingProduct?.name || id,
+        finalPrice,
+        newNumericStock.toString(),
+        remarks,
+        "updateProduct",
+        finalPriceA,
+        finalPriceB,
+        finalPriceC,
+        undefined,
+        showOnPdf,
+        true, // stockChanged
+        finalQuantityFrom,
+        finalQuantityTo,
+        finalNet,
+        recordDate
+      );
+    }
+
+    saveLocalProducts(localProducts);
+
+    res.json({
+      success: true,
+      updatedCount: updatedProducts.length,
+      purchasesCount: addedPurchases.length,
+      products: updatedProducts
+    });
+  } catch (error: any) {
+    console.error("Batch restock error:", error);
+    res.status(500).json({ error: error.message || "Failed to batch restock" });
+  }
+});
+
 app.put("/api/products/:id", (req, res) => {
   try {
     const { id } = req.params;
