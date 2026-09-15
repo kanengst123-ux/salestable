@@ -518,6 +518,17 @@ async function fetchPromoCategories() {
 // Local products persistence helpers
 const LOCAL_PRODUCTS_FILE = path.join(process.cwd(), "local_products.json");
 
+function isProductShowOnPdf(p: any): boolean {
+  if (!p) return false;
+  const val = (
+    p.extraAttributes?.["show on pdf"] ||
+    p.extraAttributes?.["show on pdf "] ||
+    (p.allValues ? p.allValues[30] : "") ||
+    ""
+  ).toString().trim().toUpperCase();
+  return val !== "N";
+}
+
 function getLocalProducts(): any[] {
   try {
     if (fs.existsSync(LOCAL_PRODUCTS_FILE)) {
@@ -1362,6 +1373,462 @@ async function fetchSoldDataFromSheet() {
   }
 }
 
+// ==========================================
+// Stock History Tracking Integration
+// Sources: 
+//  1. 'Purchase 庫存異動記錄' (gid=47411987 + local backup)
+//  2. 'Trade_Log' (gid=1412322886 + backupTradeUrl)
+//  3. 'Trade_log_admin' (gid=2071438386)
+// ==========================================
+
+interface StockHistoryEvent {
+  id: string;
+  source: "Purchase" | "Trade_Log" | "Trade_log_admin";
+  sourceLabel: string;
+  date: string;
+  formattedDate: string;
+  timestamp: number;
+  change: number;
+  stockLevel: number | string;
+  quantityFrom?: string | number;
+  quantityTo?: string | number;
+  customer?: string;
+  district?: string;
+  user?: string;
+  orderId?: string;
+  unit?: string;
+  quantity?: number;
+  refMultiplier?: number;
+  totalUnits?: number;
+  price?: number;
+  subtotal?: number;
+  remarks?: string;
+}
+
+let stockHistoryCache: {
+  timestamp: number;
+  purchaseRows: any[];
+  tradeLogRows: any[];
+  tradeLogAdminRows: any[];
+  backupTradeRows: any[];
+} | null = null;
+
+function parseStockEventDate(dateStr: string): { timestamp: number; displayDate: string } {
+  if (!dateStr) return { timestamp: 0, displayDate: "未知時間" };
+  const trimmed = dateStr.trim();
+
+  // Check DD-MMM-YY (e.g. 02-Jun-26)
+  const ddMmmYyMatch = trimmed.match(/^(\d{1,2})[-/]([A-Za-z]{3})[-/](\d{2,4})/);
+  if (ddMmmYyMatch) {
+    const day = parseInt(ddMmmYyMatch[1], 10);
+    const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    const month = monthNames.indexOf(ddMmmYyMatch[2].toLowerCase());
+    let year = parseInt(ddMmmYyMatch[3], 10);
+    if (year < 100) year += 2000;
+    if (month !== -1) {
+      const d = new Date(year, month, day, 12, 0, 0);
+      return {
+        timestamp: d.getTime(),
+        displayDate: `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`
+      };
+    }
+  }
+
+  // Check DD-MM-YYYY HH:mm:ss or DD-MM-YYYY
+  const ddmmyyyyMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (ddmmyyyyMatch) {
+    const day = parseInt(ddmmyyyyMatch[1], 10);
+    const month = parseInt(ddmmyyyyMatch[2], 10) - 1;
+    const year = parseInt(ddmmyyyyMatch[3], 10);
+    const hour = parseInt(ddmmyyyyMatch[4] || "0", 10);
+    const min = parseInt(ddmmyyyyMatch[5] || "0", 10);
+    const sec = parseInt(ddmmyyyyMatch[6] || "0", 10);
+    const d = new Date(year, month, day, hour, min, sec);
+    return {
+      timestamp: d.getTime(),
+      displayDate: `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")} ${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`
+    };
+  }
+
+  // Check YYYY/MM/DD or YYYY-MM-DD
+  const yyyymmddMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (yyyymmddMatch) {
+    const year = parseInt(yyyymmddMatch[1], 10);
+    const month = parseInt(yyyymmddMatch[2], 10) - 1;
+    const day = parseInt(yyyymmddMatch[3], 10);
+    const hour = parseInt(yyyymmddMatch[4] || "0", 10);
+    const min = parseInt(yyyymmddMatch[5] || "0", 10);
+    const sec = parseInt(yyyymmddMatch[6] || "0", 10);
+    const d = new Date(year, month, day, hour, min, sec);
+    return {
+      timestamp: d.getTime(),
+      displayDate: `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")} ${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`
+    };
+  }
+
+  const d = new Date(trimmed);
+  if (!isNaN(d.getTime())) {
+    return {
+      timestamp: d.getTime(),
+      displayDate: d.toLocaleString("zh-HK", { hour12: false })
+    };
+  }
+
+  return { timestamp: 0, displayDate: trimmed };
+}
+
+function normalizeProductName(str: string): string {
+  if (!str) return "";
+  return str.toString().toLowerCase().replace(/[\s\t\r\n（）()【】\[\]\-—_]/g, "");
+}
+
+async function fetchRawStockSheets(forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && stockHistoryCache && (now - stockHistoryCache.timestamp < 30000)) {
+    return stockHistoryCache;
+  }
+
+  const tradeLogUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=1412322886";
+  const adminUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=2071438386";
+  const purchaseUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=47411987";
+  const backupTradeUrl = "https://docs.google.com/spreadsheets/d/10gGU4ZZH_qUKwYklfIK0sQFNCUCfUc36C3SpkfUoQlA/export?format=csv";
+
+  const [tRes, aRes, pRes, bRes] = await Promise.all([
+    fetch(tradeLogUrl).catch(() => null),
+    fetch(adminUrl).catch(() => null),
+    fetch(purchaseUrl).catch(() => null),
+    fetch(backupTradeUrl).catch(() => null)
+  ]);
+
+  const [tTxt, aTxt, pTxt, bTxt] = await Promise.all([
+    tRes && tRes.ok ? tRes.text() : Promise.resolve(""),
+    aRes && aRes.ok ? aRes.text() : Promise.resolve(""),
+    pRes && pRes.ok ? pRes.text() : Promise.resolve(""),
+    bRes && bRes.ok ? bRes.text() : Promise.resolve("")
+  ]);
+
+  const tradeLogRows = tTxt ? parseCSV(tTxt).slice(1) : [];
+  const tradeLogAdminRows = aTxt ? parseCSV(aTxt).slice(1) : [];
+  const purchaseRows = pTxt ? parseCSV(pTxt).slice(1) : [];
+  const backupTradeRows = bTxt ? parseCSV(bTxt).slice(1) : [];
+
+  stockHistoryCache = {
+    timestamp: now,
+    purchaseRows,
+    tradeLogRows,
+    tradeLogAdminRows,
+    backupTradeRows
+  };
+
+  return stockHistoryCache;
+}
+
+async function getStockHistoryForProduct(queryId: string, queryName: string, forceRefresh = false) {
+  const { purchaseRows, tradeLogRows, tradeLogAdminRows, backupTradeRows } = await fetchRawStockSheets(forceRefresh);
+
+  const cleanQueryId = (queryId || "").trim().toLowerCase().replace(/^id-/, "");
+  const normQueryName = normalizeProductName(queryName);
+
+  const isMatch = (rowId?: string, rowName?: string) => {
+    if (rowId && cleanQueryId) {
+      const cleanRowId = rowId.trim().toLowerCase().replace(/^id-/, "");
+      if (cleanRowId && cleanRowId === cleanQueryId) return true;
+    }
+    if (!rowName || !normQueryName) return false;
+    const normRow = normalizeProductName(rowName);
+    return normRow === normQueryName || normRow.includes(normQueryName) || normQueryName.includes(normRow);
+  };
+
+  const events: StockHistoryEvent[] = [];
+  const seenEventKeys = new Set<string>();
+
+  // 1. Process Purchase rows (Google Sheet gid=47411987 + local backup)
+  const allPurchaseRecords: any[] = [];
+  purchaseRows.forEach((r, idx) => {
+    if (isMatch("", r[1])) {
+      allPurchaseRecords.push({
+        date: r[0],
+        product: r[1],
+        quantityFrom: r[2],
+        quantityTo: r[3],
+        net: r[4],
+        sourceId: `gs-pur-${idx}`
+      });
+    }
+  });
+
+  const localPurchases = getPurchases();
+  localPurchases.forEach((lp, idx) => {
+    if (isMatch("", lp.product)) {
+      allPurchaseRecords.push({
+        date: lp.date,
+        product: lp.product,
+        quantityFrom: lp.quantityFrom,
+        quantityTo: lp.quantityTo,
+        net: lp.net,
+        sourceId: lp.id || `local-pur-${idx}`
+      });
+    }
+  });
+
+  allPurchaseRecords.forEach(rec => {
+    const { timestamp, displayDate } = parseStockEventDate(rec.date);
+    const key = `Purchase-${timestamp}-${rec.quantityTo}-${rec.net}`;
+    if (!seenEventKeys.has(key)) {
+      seenEventKeys.add(key);
+      const netChange = typeof rec.net === "number" ? rec.net : parseFloat(rec.net) || 0;
+      events.push({
+        id: `pur-${timestamp}-${Math.random().toString(36).substr(2, 5)}`,
+        source: "Purchase",
+        sourceLabel: "Purchase 庫存異動記錄",
+        date: rec.date,
+        formattedDate: displayDate,
+        timestamp,
+        change: netChange,
+        stockLevel: rec.quantityTo !== undefined ? rec.quantityTo : 0,
+        quantityFrom: rec.quantityFrom,
+        quantityTo: rec.quantityTo,
+        remarks: netChange >= 0 ? `來貨/進貨增加 +${netChange}` : `庫存調整扣減 ${netChange}`
+      });
+    }
+  });
+
+  // 2. Process Trade_Log (gid=1412322886)
+  tradeLogRows.forEach((r, idx) => {
+    if (isMatch(r[2], r[1])) {
+      const { timestamp, displayDate } = parseStockEventDate(r[0]);
+      const qty = parseFloat(r[3]) || 0;
+      const ref = parseFloat(r[5]) || 1;
+      const totalUnits = qty * ref;
+      const customer = (r[7] || "").trim();
+      const orderId = (r[12] || r[11] || "").trim();
+      const user = (r[10] || "").trim();
+
+      const key = `TradeLog-${timestamp}-${customer}-${totalUnits}-${orderId}`;
+      if (!seenEventKeys.has(key)) {
+        seenEventKeys.add(key);
+        events.push({
+          id: `tl-${idx}-${timestamp}`,
+          source: "Trade_Log",
+          sourceLabel: "Trade_Log 客戶銷售訂單",
+          date: r[0],
+          formattedDate: displayDate,
+          timestamp,
+          change: -totalUnits,
+          stockLevel: 0,
+          customer,
+          district: (r[8] || "").trim(),
+          user,
+          orderId,
+          unit: (r[4] || "件").trim(),
+          quantity: qty,
+          refMultiplier: ref,
+          totalUnits,
+          price: parseFloat(r[6]) || 0,
+          subtotal: parseFloat(r[9]) || 0,
+          remarks: `客戶訂購: ${qty} ${r[4] || "件"} (換算 ${totalUnits} 件)`
+        });
+      }
+    }
+  });
+
+  // 3. Process backupTradeRows (from 10gGU... sheet)
+  backupTradeRows.forEach((r, idx) => {
+    if (isMatch("", r[1])) {
+      const { timestamp, displayDate } = parseStockEventDate(r[0]);
+      const qty = parseFloat(r[3]) || 0;
+      const ref = parseFloat(r[5]) || 1;
+      const totalUnits = qty * ref;
+      const customer = (r[7] || "").trim();
+      const orderId = (r[11] || "").trim();
+      const user = (r[10] || "").trim();
+
+      const key = `TradeLog-${timestamp}-${customer}-${totalUnits}-${orderId}`;
+      if (!seenEventKeys.has(key)) {
+        seenEventKeys.add(key);
+        events.push({
+          id: `tl-bak-${idx}-${timestamp}`,
+          source: "Trade_Log",
+          sourceLabel: "Trade_Log 客戶銷售訂單",
+          date: r[0],
+          formattedDate: displayDate,
+          timestamp,
+          change: -totalUnits,
+          stockLevel: 0,
+          customer,
+          district: (r[8] || "").trim(),
+          user,
+          orderId,
+          unit: (r[4] || "件").trim(),
+          quantity: qty,
+          refMultiplier: ref,
+          totalUnits,
+          price: parseFloat(r[6]) || 0,
+          subtotal: parseFloat(r[9]) || 0,
+          remarks: `歷史訂單: ${qty} ${r[4] || "件"} (換算 ${totalUnits} 件)`
+        });
+      }
+    }
+  });
+
+  // 4. Process Trade_log_admin (gid=2071438386)
+  tradeLogAdminRows.forEach((r, idx) => {
+    if (isMatch(r[2], r[1])) {
+      const { timestamp, displayDate } = parseStockEventDate(r[0]);
+      const qty = parseFloat(r[3]) || 0;
+      const ref = parseFloat(r[5]) || 1;
+      const totalUnits = qty * ref;
+      const customer = (r[7] || "").trim();
+      const orderId = (r[12] || r[11] || "").trim();
+      const user = (r[10] || "Admin").trim();
+
+      const key = `TradeLogAdmin-${timestamp}-${customer}-${totalUnits}-${orderId}`;
+      if (!seenEventKeys.has(key)) {
+        seenEventKeys.add(key);
+        events.push({
+          id: `tla-${idx}-${timestamp}`,
+          source: "Trade_log_admin",
+          sourceLabel: "Trade_log_admin 管理員開單",
+          date: r[0],
+          formattedDate: displayDate,
+          timestamp,
+          change: -totalUnits,
+          stockLevel: 0,
+          customer,
+          district: (r[8] || "").trim(),
+          user,
+          orderId,
+          unit: (r[4] || "件").trim(),
+          quantity: qty,
+          refMultiplier: ref,
+          totalUnits,
+          price: parseFloat(r[6]) || 0,
+          subtotal: parseFloat(r[9]) || 0,
+          remarks: `管理員開單出庫: ${qty} ${r[4] || "件"} (換算 ${totalUnits} 件)`
+        });
+      }
+    }
+  });
+
+  // Sort events chronologically (ascending timestamp)
+  events.sort((a, b) => a.timestamp - b.timestamp);
+
+  // Fetch current product to anchor stock level
+  let currentProduct: any = null;
+  const localProducts = getLocalProducts();
+  currentProduct = localProducts.find((p: any) => isMatch(p.id, p.name));
+  if (!currentProduct && productsCache.length > 0) {
+    currentProduct = productsCache.find((p: any) => isMatch(p.id, p.name));
+  }
+
+  let currentStockNum = 0;
+  let isAlwaysStock = false;
+  let currentStockDisplay: string | number = 0;
+
+  if (currentProduct) {
+    isAlwaysStock = !!currentProduct.alwaysStock;
+    if (isAlwaysStock) {
+      currentStockDisplay = "長期充足";
+      currentStockNum = 0;
+    } else {
+      currentStockNum = parseFloat(currentProduct.secondaryStockCount) || 0;
+      currentStockDisplay = currentStockNum;
+    }
+  }
+
+  // Calculate cumulative stock trajectory backwards from currentStockNum
+  if (!isAlwaysStock && events.length > 0) {
+    let runningStock = currentStockNum;
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev.quantityTo !== undefined && !isNaN(Number(ev.quantityTo))) {
+        ev.stockLevel = Number(ev.quantityTo);
+        runningStock = Number(ev.quantityTo) - (ev.change || 0);
+      } else {
+        ev.stockLevel = runningStock;
+        runningStock = runningStock - (ev.change || 0);
+      }
+    }
+  } else if (isAlwaysStock) {
+    events.forEach(ev => {
+      ev.stockLevel = "長期充足";
+    });
+  }
+
+  // Calculate summary metrics
+  let totalInbound = 0;
+  let totalOutbound = 0;
+  let purchaseCount = 0;
+  let tradeLogCount = 0;
+  let tradeLogAdminCount = 0;
+
+  events.forEach(ev => {
+    if (ev.source === "Purchase") {
+      purchaseCount++;
+      if (ev.change > 0) totalInbound += ev.change;
+      else totalOutbound += Math.abs(ev.change);
+    } else if (ev.source === "Trade_Log") {
+      tradeLogCount++;
+      totalOutbound += Math.abs(ev.change);
+    } else if (ev.source === "Trade_log_admin") {
+      tradeLogAdminCount++;
+      totalOutbound += Math.abs(ev.change);
+    }
+  });
+
+  return {
+    product: {
+      id: queryId || (currentProduct ? currentProduct.id : ""),
+      name: queryName || (currentProduct ? currentProduct.name : ""),
+      currentStock: currentStockDisplay,
+      alwaysStock: isAlwaysStock,
+      hasStock: currentProduct ? !!currentProduct.hasStock : true
+    },
+    summary: {
+      totalEvents: events.length,
+      purchaseCount,
+      tradeLogCount,
+      tradeLogAdminCount,
+      totalInbound,
+      totalOutbound,
+      netChange: totalInbound - totalOutbound
+    },
+    events
+  };
+}
+
+app.get("/api/stock-history", async (req, res) => {
+  try {
+    const productId = (req.query.productId as string) || "";
+    const productName = (req.query.productName as string) || "";
+    const forceRefresh = req.query.refresh === "true";
+
+    if (!productId && !productName) {
+      return res.status(400).json({ error: "productId or productName query parameter is required" });
+    }
+
+    const historyData = await getStockHistoryForProduct(productId, productName, forceRefresh);
+    res.json(historyData);
+  } catch (error: any) {
+    console.error("Stock history API error:", error);
+    res.status(500).json({ error: error.message || "Failed to fetch stock history" });
+  }
+});
+
+app.get("/api/products/:id/stock-history", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const productName = (req.query.name as string) || "";
+    const forceRefresh = req.query.refresh === "true";
+
+    const historyData = await getStockHistoryForProduct(id, productName, forceRefresh);
+    res.json(historyData);
+  } catch (error: any) {
+    console.error("Stock history by ID API error:", error);
+    res.status(500).json({ error: error.message || "Failed to fetch stock history" });
+  }
+});
+
 app.get("/api/sold-data", async (req, res) => {
   try {
     const forceRefresh = req.query.refresh === "true";
@@ -1436,10 +1903,12 @@ app.get("/api/products", async (req, res) => {
       };
     });
     
-    res.json({ products: decoratedProducts, costCategories, promoCategories });
+    // Only include products that are 'show on pdf' (i.e. not 'N' in Col AE of 'raw' tab)
+    const showOnPdfProducts = decoratedProducts.filter(isProductShowOnPdf);
+    res.json({ products: showOnPdfProducts, costCategories, promoCategories });
   } catch (error) {
     console.error("Get products error:", error);
-    res.json({ products: getLocalProducts(), costCategories: { symbolToName: {}, productIdToSymbol: {}, productIdToCostName: {}, categoryOrder: [], highlightCategories: [] }, promoCategories: [] });
+    res.json({ products: getLocalProducts().filter(isProductShowOnPdf), costCategories: { symbolToName: {}, productIdToSymbol: {}, productIdToCostName: {}, categoryOrder: [], highlightCategories: [] }, promoCategories: [] });
   }
 });
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { jsPDF } from "jspdf";
+import { StockHistoryModal } from "./components/StockHistoryModal";
 import { 
   Search, 
   Filter, 
@@ -363,19 +364,15 @@ export default function App() {
       console.warn("Storage remove failed for auth:", e);
     }
     setIsAuthenticated(false);
+    setViewMode("admin");
+    setSelectedPriceTier("C");
     setPasscode("");
     showToast("已登出，系統存取已鎖定");
   };
 
   const [products, setProducts] = useState<Product[]>([]);
-  const [selectedPriceTier, setSelectedPriceTier] = useState<"A" | "B" | "C">(() => {
-    try {
-      const saved = localStorage.getItem("selected_price_tier");
-      return (saved === "A" || saved === "B" || saved === "C" ? saved : "C");
-    } catch {
-      return "C";
-    }
-  });
+  // Selected price tier defaults to "C"
+  const [selectedPriceTier, setSelectedPriceTier] = useState<"A" | "B" | "C">("C");
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [syncTime, setSyncTime] = useState<string>("");
@@ -441,16 +438,20 @@ export default function App() {
     return product.price;
   };
 
-  // View mode and google sheets integration states
-  const [viewMode, setViewMode] = useState<"admin" | "customer">(() => {
-    try {
-      const saved = localStorage.getItem("app_view_mode");
-      return (saved === "customer" ? "customer" : "admin");
-    } catch (e) {
-      console.warn("Storage access not allowed in this environment:", e);
-      return "admin";
-    }
-  });
+  // Helper to verify if a product is marked as 'show on pdf' (Col AE of 'raw' tab !== 'N')
+  const isProductShowOnPdf = (product: Product | any): boolean => {
+    if (!product) return false;
+    const showPdfVal = (
+      product.extraAttributes?.["show on pdf"] ||
+      product.extraAttributes?.["show on pdf "] ||
+      (product.allValues ? product.allValues[30] : "") ||
+      ""
+    ).toString().trim().toUpperCase();
+    return showPdfVal !== "N";
+  };
+
+  // View mode defaults to "admin" ('後台管理' tab) on open
+  const [viewMode, setViewMode] = useState<"admin" | "customer">("admin");
 
   const [sheetSettings, setSheetSettings] = useState({
     appsScriptUrl: "https://script.google.com/macros/s/AKfycbxJBpLD4XstIGc_47V4ys3WYr_OX5vfsc36u5aEIsAyv06wYDWT_FFuAooQVMt1Pq8R/exec",
@@ -561,15 +562,7 @@ export default function App() {
     const groups: Record<string, Product[]> = {};
 
     // Filter products for PDF catalog: only show products not marked as 'N' in Col AE ('show on pdf') of 'raw' tab
-    const pdfProducts = prods.filter(p => {
-      const showPdfVal = (
-        p.extraAttributes?.["show on pdf"] ||
-        p.extraAttributes?.["show on pdf "] ||
-        (p.allValues ? p.allValues[30] : "") ||
-        ""
-      ).trim().toUpperCase();
-      return showPdfVal !== "N";
-    });
+    const pdfProducts = prods.filter(isProductShowOnPdf);
 
     const sectionsOrder = (cCat.sectionsOrder && cCat.sectionsOrder.length > 0)
       ? cCat.sectionsOrder
@@ -684,6 +677,7 @@ export default function App() {
       Object.keys(soldData).map(name => name.replace(/\s+/g, "").trim().toLowerCase())
     );
     return products.filter(p => {
+      if (!isProductShowOnPdf(p)) return false;
       const norm = p.name.replace(/\s+/g, "").trim().toLowerCase();
       const hasSold = soldNamesNormalized.has(norm);
       if (hasSold) return false;
@@ -1809,6 +1803,7 @@ export default function App() {
   const [editProductImagePreview, setEditProductImagePreview] = useState<string>("");
   const [editProductShowOnPdf, setEditProductShowOnPdf] = useState<boolean>(true);
   const [isUpdatingProduct, setIsUpdatingProduct] = useState<boolean>(false);
+  const [isStockHistoryModalOpen, setIsStockHistoryModalOpen] = useState<boolean>(false);
 
   // Purchase tab log state
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState<boolean>(false);
@@ -1861,6 +1856,7 @@ export default function App() {
     if (!restockSearch.trim()) return [];
     const q = restockSearch.toLowerCase().trim();
     return products.filter(p => {
+      if (!isProductShowOnPdf(p)) return false;
       const nameMatch = p.name && p.name.toLowerCase().includes(q);
       const idMatch = p.id && p.id.toLowerCase().includes(q);
       const catMatch = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].toLowerCase().includes(q);
@@ -2437,11 +2433,11 @@ export default function App() {
       }
 
       if (data.products) {
-        // Safe client-side deduplication by ID, ensuring perfect uniquely-keyed rendering
+        // Safe client-side deduplication by ID, ensuring only products marked as 'show on pdf' are loaded
         const uniqueProducts: any[] = [];
         const seenIds = new Set<string>();
         for (const p of data.products) {
-          if (p && p.id && !seenIds.has(p.id)) {
+          if (p && p.id && !seenIds.has(p.id) && isProductShowOnPdf(p)) {
             seenIds.add(p.id);
             uniqueProducts.push(p);
           }
@@ -2493,7 +2489,7 @@ export default function App() {
         }
 
         if (cachedProductsStr) {
-          const parsedProducts = JSON.parse(cachedProductsStr);
+          const parsedProducts = JSON.parse(cachedProductsStr).filter(isProductShowOnPdf);
           setProducts(parsedProducts);
           setUsingOfflineBackup(true);
           if (cachedCostStr) {
@@ -2594,15 +2590,6 @@ export default function App() {
     }
   }, [cart]);
 
-  // Persist viewMode
-  useEffect(() => {
-    try {
-      localStorage.setItem("app_view_mode", viewMode);
-    } catch (e) {
-      console.warn("Could not save viewMode to storage:", e);
-    }
-  }, [viewMode]);
-
   const handleSaveSheetSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -2675,20 +2662,8 @@ export default function App() {
 
   // Filtered and Sorted Products
   const processedProducts = useMemo(() => {
-    let result = [...products];
-
-    // Restrict customer catalog mode to products not marked as 'N' in Col AE ('show on pdf')
-    if (viewMode === "customer") {
-      result = result.filter(p => {
-        const showPdfVal = (
-          p.extraAttributes?.["show on pdf"] ||
-          p.extraAttributes?.["show on pdf "] ||
-          (p.allValues ? p.allValues[30] : "") ||
-          ""
-        ).trim().toUpperCase();
-        return showPdfVal !== "N";
-      });
-    }
+    // Only include products that are 'show on pdf' (i.e. not 'N' in Col AE of 'raw' tab)
+    let result = products.filter(isProductShowOnPdf);
 
     // 1. Search Query Filter
     if (searchQuery.trim() !== "") {
@@ -3115,7 +3090,10 @@ export default function App() {
                     <span className="hidden sm:inline">鎖定系統</span>
                   </button>
                   <button
-                    onClick={() => setViewMode("customer")}
+                    onClick={() => {
+                      setSelectedPriceTier("C");
+                      setViewMode("customer");
+                    }}
                     className="px-3.5 sm:px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md shadow-emerald-100 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] shrink-0"
                     title="展示用戶端商品圖冊和詢價下單流程"
                   >
@@ -4327,6 +4305,22 @@ export default function App() {
                       <div className="mt-1.5 flex items-start gap-1.5 text-[10px] text-slate-500 leading-normal">
                         <Info className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
                         <span>若更改此數值，系統將自動於試算表 <strong>Purchase</strong> 分頁記錄 5 個欄位：<strong>Date</strong>（變動時間）、<strong>Product</strong>（商品名稱）、<strong>Quantity from</strong>（變動前）、<strong>Quantity to</strong>（變動後）、<strong>Net</strong>（變動差額）。</span>
+                      </div>
+
+                      {/* Stock Level History Tracking Button */}
+                      <div className="pt-2">
+                        <button
+                          id="btn-track-stock-history"
+                          type="button"
+                          onClick={() => setIsStockHistoryModalOpen(true)}
+                          className="w-full flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-blue-600 hover:from-indigo-600 hover:to-blue-700 text-white font-bold text-xs shadow-xs hover:shadow-md transition-all cursor-pointer group"
+                        >
+                          <TrendingUp className="w-4 h-4 text-emerald-300 group-hover:scale-110 transition-transform" />
+                          <span>追蹤庫存異動歷史與趨勢圖表 (Purchase / Trade Log)</span>
+                        </button>
+                        <p className="text-[10px] text-slate-400 mt-1 text-center font-medium">
+                          依時間順序整合 Purchase 庫存異動、Trade_Log 客戶訂單與 Trade_log_admin 管理員開單歷程
+                        </p>
                       </div>
                     </div>
 
@@ -6481,6 +6475,18 @@ function revertStockForOrders(orderIdsMap) {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Stock History Tracking Modal */}
+      {selectedProduct && (
+        <StockHistoryModal
+          isOpen={isStockHistoryModalOpen}
+          onClose={() => setIsStockHistoryModalOpen(false)}
+          productId={selectedProduct.id}
+          productName={editProductName || selectedProduct.name}
+          currentStockDisplay={editProductQuantity || selectedProduct.secondaryStockCount}
+          isAlwaysStock={selectedProduct.alwaysStock}
+        />
       )}
 
       {/* Purchase Tab Stock Change Log Modal */}
