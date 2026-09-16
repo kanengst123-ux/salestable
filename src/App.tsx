@@ -1854,15 +1854,53 @@ export default function App() {
 
   const restockSearchResults = useMemo(() => {
     if (!restockSearch.trim()) return [];
-    const q = restockSearch.toLowerCase().trim();
-    return products.filter(p => {
-      if (!isProductShowOnPdf(p)) return false;
-      const nameMatch = p.name && p.name.toLowerCase().includes(q);
-      const idMatch = p.id && p.id.toLowerCase().includes(q);
-      const catMatch = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].toLowerCase().includes(q);
-      const costMatch = p.costName && p.costName.toLowerCase().includes(q);
-      return nameMatch || idMatch || catMatch || costMatch;
-    }).slice(0, 10);
+    const rawQ = restockSearch.trim().toLowerCase();
+    const queryWords = rawQ.split(/\s+/).filter(Boolean);
+
+    const scored: { p: Product; score: number }[] = [];
+    for (const p of products) {
+      const name = (p.name || "").toLowerCase();
+      const id = (p.id || "").toLowerCase();
+      const rawId = id.replace(/^id-/, "");
+      const sku = (p.extraAttributes?.["SKU"] || "").toLowerCase();
+      const barcode = (p.extraAttributes?.["Barcode"] || "").toLowerCase();
+      const cat = (p.extraAttributes?.["Categories"] || "").toLowerCase();
+      const cost = (p.costName || "").toLowerCase();
+
+      let score = 0;
+      if (name === rawQ) {
+        score = 1000;
+      } else if (name.startsWith(rawQ)) {
+        score = 900;
+      } else if (name.includes(rawQ)) {
+        const idx = name.indexOf(rawQ);
+        score = 800 - Math.min(idx, 100);
+      } else if (queryWords.length > 1 && queryWords.every(w => name.includes(w))) {
+        score = 700;
+      } else if (id === rawQ || rawId === rawQ || id === `id-${rawQ}`) {
+        score = 650;
+      } else if (id.includes(rawQ) || rawId.includes(rawQ)) {
+        score = 600;
+      } else if ((sku && sku.includes(rawQ)) || (barcode && barcode.includes(rawQ))) {
+        score = 500;
+      } else if (cat.includes(rawQ)) {
+        score = 300;
+      } else if (cost.includes(rawQ)) {
+        score = 200;
+      } else if (queryWords.length > 1 && queryWords.every(w => 
+        name.includes(w) || id.includes(w) || cat.includes(w) || cost.includes(w) || sku.includes(w) || barcode.includes(w)
+      )) {
+        score = 100;
+      }
+
+      if (score > 0) {
+        scored.push({ p, score });
+      }
+    }
+
+    scored.sort((a, b) => b.score - a.score || a.p.name.localeCompare(b.p.name, "zh-HK"));
+    // Show up to 200 matching products to prevent UI freezing on 1-letter generic queries while showing all real matches
+    return scored.slice(0, 200).map(x => x.p);
   }, [products, restockSearch]);
 
   const handleAddProductToRestock = (product: Product) => {
@@ -6739,10 +6777,19 @@ function revertStockForOrders(orderIdsMap) {
 
                 {/* Search Results Dropdown List */}
                 {restockSearch.trim() !== "" && (
-                  <div className="absolute z-20 left-0 right-0 mt-1 bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden max-h-60 overflow-y-auto animate-fadeIn">
+                  <div className="absolute z-20 left-0 right-0 mt-1 bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden max-h-80 sm:max-h-96 overflow-y-auto animate-fadeIn">
                     {restockSearchResults.length > 0 ? (
-                      <div className="divide-y divide-slate-100">
-                        {restockSearchResults.map((prod) => {
+                      <div>
+                        <div className="sticky top-0 z-10 bg-slate-100/95 backdrop-blur-xs px-3.5 py-2 border-b border-slate-200/80 flex items-center justify-between text-[11px] text-slate-500 font-medium">
+                          <span>
+                            共找到 <strong className="text-emerald-700 font-bold">{restockSearchResults.length}</strong> 項符合商品
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            已依相關度排序，請滑動選取
+                          </span>
+                        </div>
+                        <div className="divide-y divide-slate-100">
+                          {restockSearchResults.map((prod) => {
                           const isAlreadyIn = restockItems.some((it) => it.product.id === prod.id);
                           return (
                             <div
@@ -6800,6 +6847,7 @@ function revertStockForOrders(orderIdsMap) {
                             </div>
                           );
                         })}
+                        </div>
                       </div>
                     ) : (
                       <div className="p-4 text-center text-xs text-slate-400">
