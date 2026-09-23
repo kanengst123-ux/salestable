@@ -5,6 +5,7 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import fs from "fs";
+import { ZipArchive } from "archiver";
 import { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 
 const app = express();
@@ -786,6 +787,241 @@ app.post("/api/sync-sheet-images", async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to trigger sync" });
   }
+});
+
+// Image backup and status tracker
+let imageBackupState = {
+  isRunning: false,
+  total: 0,
+  completed: 0,
+  succeeded: 0,
+  failed: 0,
+  alreadyExists: 0,
+  currentProduct: "",
+  startedAt: 0,
+  finishedAt: 0,
+  message: "Idle"
+};
+
+async function runImageBackupTask() {
+  if (imageBackupState.isRunning) return;
+  imageBackupState = {
+    isRunning: true,
+    total: 0,
+    completed: 0,
+    succeeded: 0,
+    failed: 0,
+    alreadyExists: 0,
+    currentProduct: "Initialising product list...",
+    startedAt: Date.now(),
+    finishedAt: 0,
+    message: "Fetching products..."
+  };
+
+  try {
+    const products = await fetchProductsFromSheet();
+    const sheet15Map = await getSheet15ImageMap();
+    const publicDir = path.join(process.cwd(), "public");
+    if (!fs.existsSync(publicDir)) {
+      fs.mkdirSync(publicDir, { recursive: true });
+    }
+
+    const existingFiles = new Set(fs.readdirSync(publicDir));
+    imageBackupState.total = products.length;
+    imageBackupState.message = `Processing ${products.length} products...`;
+
+    for (let i = 0; i < products.length; i++) {
+      const p = products[i];
+      const prodId = p.id;
+      const cleanId = prodId.replace(/^(id[-_])?/i, "");
+      const targetFilename = `id-${cleanId}.jpg`;
+      imageBackupState.currentProduct = `${p.name || prodId} (${i + 1}/${products.length})`;
+
+      // 1. Check if already exists in public/ and is non-empty
+      const localPath = path.join(publicDir, targetFilename);
+      if (fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
+        imageBackupState.alreadyExists++;
+        imageBackupState.completed++;
+        continue;
+      }
+
+      // Check alternate patterns (e.g. without id- or with suffix)
+      const altFile = Array.from(existingFiles).find(f => {
+        if (!/\.(jpg|jpeg|png|webp)$/i.test(f)) return false;
+        const base = f.substring(0, f.lastIndexOf(".")).toLowerCase();
+        return base === prodId.toLowerCase() || base === `id-${cleanId}`.toLowerCase() || base === cleanId.toLowerCase();
+      });
+
+      if (altFile && fs.existsSync(path.join(publicDir, altFile)) && fs.statSync(path.join(publicDir, altFile)).size > 0) {
+        // Create an id-{cleanId}.jpg symlink or copy
+        try {
+          fs.copyFileSync(path.join(publicDir, altFile), localPath);
+          existingFiles.add(targetFilename);
+          imageBackupState.alreadyExists++;
+          imageBackupState.completed++;
+          continue;
+        } catch (_) {}
+      }
+
+      // 2. Fetch from product's image URL or Sheet15 map
+      const candidateUrls: string[] = [];
+      if (p.extraAttributes && p.extraAttributes["Image URLs"]) {
+        const uList = String(p.extraAttributes["Image URLs"]).split(/[\n,]/).map(u => u.trim()).filter(u => u.startsWith("http"));
+        candidateUrls.push(...uList);
+      }
+      const sheet15Url = sheet15Map.get(prodId.toLowerCase()) || sheet15Map.get(`id-${cleanId}`.toLowerCase()) || sheet15Map.get(cleanId.toLowerCase());
+      if (sheet15Url && !candidateUrls.includes(sheet15Url)) {
+        candidateUrls.push(sheet15Url);
+      }
+
+      let downloaded = false;
+      for (const imgUrl of candidateUrls) {
+        try {
+          const fetchRes = await fetch(imgUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+            }
+          });
+          if (fetchRes.ok) {
+            const buf = Buffer.from(await fetchRes.arrayBuffer());
+            if (buf.length > 0) {
+              fs.writeFileSync(localPath, buf);
+              existingFiles.add(targetFilename);
+              imageBackupState.succeeded++;
+              downloaded = true;
+              break;
+            }
+          }
+        } catch (fetchErr) {
+          // try next url
+        }
+      }
+
+      if (!downloaded) {
+        imageBackupState.failed++;
+      }
+      imageBackupState.completed++;
+    }
+
+    imageBackupState.isRunning = false;
+    imageBackupState.finishedAt = Date.now();
+    imageBackupState.message = `Backup completed! Local: ${imageBackupState.alreadyExists + imageBackupState.succeeded}, Failed: ${imageBackupState.failed}`;
+  } catch (err: any) {
+    imageBackupState.isRunning = false;
+    imageBackupState.finishedAt = Date.now();
+    imageBackupState.message = `Backup interrupted: ${err.message}`;
+  }
+}
+
+// Start image backup to server disk
+app.post("/api/backup/images/start", (req, res) => {
+  if (imageBackupState.isRunning) {
+    return res.json({ success: true, message: "Backup already running", status: imageBackupState });
+  }
+  runImageBackupTask();
+  res.json({ success: true, message: "Image backup task started", status: imageBackupState });
+});
+
+// Check backup status
+app.get("/api/backup/images/status", (req, res) => {
+  const publicDir = path.join(process.cwd(), "public");
+  let localFileCount = 0;
+  if (fs.existsSync(publicDir)) {
+    localFileCount = fs.readdirSync(publicDir).filter(f => /\.(jpg|jpeg|png|webp)$/i.test(f)).length;
+  }
+  res.json({
+    ...imageBackupState,
+    localFileCount
+  });
+});
+
+// Download all saved product images as a single ZIP file
+app.get("/api/backup/images/zip", (req, res) => {
+  const publicDir = path.join(process.cwd(), "public");
+  if (!fs.existsSync(publicDir)) {
+    return res.status(404).send("Public directory not found");
+  }
+
+  const imageFiles = fs.readdirSync(publicDir).filter(f => /\.(jpg|jpeg|png|webp)$/i.test(f));
+  if (imageFiles.length === 0) {
+    return res.status(404).send("No images found to download");
+  }
+
+  const archive = new ZipArchive({ zlib: { level: 5 } });
+  const filename = `product-images-backup-${new Date().toISOString().slice(0, 10)}.zip`;
+
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+  archive.on("error", (err) => {
+    console.error("ZIP Archive Error:", err);
+    res.status(500).end();
+  });
+
+  archive.pipe(res);
+
+  for (const file of imageFiles) {
+    const filePath = path.join(publicDir, file);
+    if (fs.existsSync(filePath)) {
+      archive.file(filePath, { name: file });
+    }
+  }
+
+  archive.finalize();
+});
+
+// Explicit API endpoints for retrieving product image by ID
+app.get(["/api/products/:id/image", "/api/images/:id"], async (req, res) => {
+  const rawId = req.params.id || "";
+  const cleanId = rawId.replace(/^(id[-_])?/i, "").replace(/\.(jpg|jpeg|png|webp)$/i, "");
+  const publicDir = path.join(process.cwd(), "public");
+
+  // Candidates filename
+  const candidates = [
+    `id-${cleanId}.jpg`,
+    `id-${cleanId}.jpeg`,
+    `id-${cleanId}.png`,
+    `id-${cleanId}.webp`,
+    `${cleanId}.jpg`,
+    `${cleanId}.jpeg`,
+    `${rawId}.jpg`,
+    `${rawId}`
+  ];
+
+  for (const c of candidates) {
+    const fPath = path.join(publicDir, c);
+    if (fs.existsSync(fPath)) {
+      const stats = fs.statSync(fPath);
+      if (stats.size > 0) {
+        res.setHeader("Content-Type", getMimeType(c));
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        return res.sendFile(fPath);
+      }
+    }
+  }
+
+  // Next, try on-demand fetch from Sheet15 or Products cache
+  try {
+    const sheet15Map = await getSheet15ImageMap();
+    const imgUrl = sheet15Map.get(rawId.toLowerCase()) || sheet15Map.get(`id-${cleanId}`.toLowerCase()) || sheet15Map.get(cleanId.toLowerCase());
+    if (imgUrl) {
+      const fetchRes = await fetch(imgUrl);
+      if (fetchRes.ok) {
+        const buf = Buffer.from(await fetchRes.arrayBuffer());
+        if (buf.length > 0) {
+          const savePath = path.join(publicDir, `id-${cleanId}.jpg`);
+          fs.writeFileSync(savePath, buf);
+          res.setHeader("Content-Type", "image/jpeg");
+          res.setHeader("Cache-Control", "public, max-age=31536000");
+          return res.send(buf);
+        }
+      }
+    }
+  } catch (_) {}
+
+  // Fallback to 404
+  return res.status(404).send("Product image not found");
 });
 
 app.post("/api/upload-image", async (req, res) => {

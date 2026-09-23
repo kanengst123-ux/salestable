@@ -38,6 +38,9 @@ import {
   Smartphone,
   Settings,
   Download,
+  Archive,
+  Cloud,
+  CloudUpload,
   Lock,
   KeyRound,
   LogOut,
@@ -49,6 +52,9 @@ import {
   History,
   ArrowRight
 } from "lucide-react";
+import { initDriveAuth, googleDriveSignIn, driveLogout, getDriveAccessToken } from "./lib/driveAuth";
+import { uploadImageToDrive } from "./lib/driveSync";
+import type { User as FirebaseUser } from "firebase/auth";
 
 interface Product {
   id: string;
@@ -550,9 +556,102 @@ export default function App() {
   // Offline support & PDF catalog states
   const [cacheProgress, setCacheProgress] = useState<number>(-1); // -1 means not running, 0-100 means percentage
   const [cacheCount, setCacheCount] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
+  const [serverBackupStatus, setServerBackupStatus] = useState<{
+    isRunning: boolean;
+    total: number;
+    completed: number;
+    succeeded: number;
+    failed: number;
+    alreadyExists: number;
+    localFileCount?: number;
+    message: string;
+  } | null>(null);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
   const [isPreviewingPdfPrint, setIsPreviewingPdfPrint] = useState<boolean>(false);
   const [publicImageFiles, setPublicImageFiles] = useState<Set<string>>(new Set());
+
+  // Check server backup status periodically
+  const fetchServerBackupStatus = async () => {
+    try {
+      const res = await fetch("/api/backup/images/status");
+      if (res.ok) {
+        const data = await res.json();
+        setServerBackupStatus(data);
+      }
+    } catch (_) {}
+  };
+
+  useEffect(() => {
+    fetchServerBackupStatus();
+  }, []);
+
+  const handleStartServerBackup = async () => {
+    try {
+      showToast("已啟動伺服器端圖片封存任務...");
+      const res = await fetch("/api/backup/images/start", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setServerBackupStatus(data.status);
+      }
+    } catch (e: any) {
+      showToast("啟動伺服器備份失敗：" + e.message);
+    }
+  };
+
+  useEffect(() => {
+    if (!serverBackupStatus?.isRunning) return;
+    const interval = setInterval(fetchServerBackupStatus, 2000);
+    return () => clearInterval(interval);
+  }, [serverBackupStatus?.isRunning]);
+
+  // Google Drive state & authentication
+  const [isDriveModalOpen, setIsDriveModalOpen] = useState<boolean>(false);
+  const [driveUser, setDriveUser] = useState<FirebaseUser | null>(null);
+  const [driveToken, setDriveToken] = useState<string | null>(null);
+  const [isDriveConnecting, setIsDriveConnecting] = useState<boolean>(false);
+
+  useEffect(() => {
+    const unsub = initDriveAuth(
+      (user, token) => {
+        setDriveUser(user);
+        setDriveToken(token);
+      },
+      () => {
+        setDriveUser(null);
+        setDriveToken(null);
+      }
+    );
+    return () => {
+      if (typeof unsub === "function") unsub();
+    };
+  }, []);
+
+  const handleConnectDrive = async () => {
+    setIsDriveConnecting(true);
+    try {
+      const res = await googleDriveSignIn();
+      if (res) {
+        setDriveUser(res.user);
+        setDriveToken(res.accessToken);
+        showToast("已成功連結 Google Drive！");
+      }
+    } catch (e: any) {
+      showToast("Google Drive 授權失敗：" + (e.message || "未知錯誤"));
+    } finally {
+      setIsDriveConnecting(false);
+    }
+  };
+
+  const handleDisconnectDrive = async () => {
+    try {
+      await driveLogout();
+      setDriveUser(null);
+      setDriveToken(null);
+      showToast("已解除 Google Drive 連結");
+    } catch (e: any) {
+      showToast("登出失敗：" + e.message);
+    }
+  };
 
   // Helper function to build ordered catalog products following the exact sequence of Col E & F in Cost tab
   const buildOrderedCatalogProducts = (
@@ -1571,7 +1670,7 @@ export default function App() {
               // 2. Image inside Card
               const pad = 1.0;
               const imgBoxW = cardW - (pad * 2); // 45.5 mm
-              const imgBoxH = 41.5; // 41.5 mm (provides comfortable vertical space for larger typography)
+              const imgBoxH = 36.5; // 36.5 mm (clean aspect ratio leaving comfortable space below for name and price tag)
               const imgX_base = cx + pad;
               const imgY_base = cy + pad;
 
@@ -1648,22 +1747,64 @@ export default function App() {
                 doc.line(imgX_base, imgY_base, imgX_base + imgBoxW, imgY_base + imgBoxH);
               }
 
-              // 3. Price Tag hovering at Bottom LEFT Corner of Image (Significantly Larger & Bolder)
+              // 3. Product Name under Image
+              const textX = cx + 1.5;
+              const nameStartY = imgY_base + imgBoxH + 3.2;
+              const productNameStr = p.costName || p.name || "";
+
+              if (fontAdded) {
+                doc.setFontSize(9.6);
+                doc.setFont("NotoSansTC", "bold");
+                if (isOutOfStock) {
+                  doc.setTextColor(156, 163, 175);
+                } else {
+                  doc.setTextColor(15, 23, 42);
+                }
+                const wrappedName = doc.splitTextToSize(productNameStr, cardW - 2.8);
+                const line1 = wrappedName[0] || "";
+                let line2 = wrappedName[1] || "";
+                if (wrappedName.length > 2) {
+                  line2 = line2.substring(0, Math.max(0, line2.length - 2)) + "...";
+                }
+                doc.text(line1, textX, nameStartY);
+                if (line2) {
+                  doc.text(line2, textX, nameStartY + 4.1);
+                }
+              } else {
+                const textImg = createCanvasTextDataUrl(
+                  productNameStr,
+                  cardW - 2.8,
+                  isOutOfStock ? "#9ca3af" : "#0f172a"
+                );
+                if (textImg.dataUrl) {
+                  doc.addImage(textImg.dataUrl, "PNG", textX, nameStartY - 1.2, textImg.widthMm, textImg.heightMm);
+                }
+              }
+
+              // 4. Price Tag at the space UNDER Product Name (not inside the picture)
               const priceVal = parseFloat(getProductPrice(p));
               const priceStr = priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : (fontAdded ? "請詢價" : "Inquire");
 
-              doc.setFontSize(10.5);
+              doc.setFontSize(9.5);
               if (fontAdded) {
                 doc.setFont("NotoSansTC", "bold");
+              } else {
+                doc.setFont("helvetica", "bold");
               }
               const pWidth = doc.getTextWidth(priceStr);
-              const badgeW = Math.max(22, pWidth + 3.8);
-              const badgeH = 6.2;
-              const badgeX = imgX_base + 0.8;
-              const badgeY = imgY_base + imgBoxH - badgeH - 0.8;
+              const badgeW = Math.max(20, pWidth + 3.4);
+              const badgeH = 5.2;
+              const badgeX = textX;
+              const badgeY = cy + cardH - badgeH - 1.8;
 
-              doc.setFillColor(255, 255, 255);
-              doc.setDrawColor(226, 232, 240);
+              // Clean price tag badge with subtle border
+              if (isOutOfStock) {
+                doc.setFillColor(241, 245, 249);
+                doc.setDrawColor(226, 232, 240);
+              } else {
+                doc.setFillColor(248, 250, 252);
+                doc.setDrawColor(203, 213, 225);
+              }
               doc.setLineWidth(0.2);
               doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.0, 1.0, "FD");
 
@@ -1672,43 +1813,9 @@ export default function App() {
               } else {
                 doc.setTextColor(15, 23, 42);
               }
-              doc.text(priceStr, badgeX + 1.8, badgeY + 4.5);
+              doc.text(priceStr, badgeX + 1.7, badgeY + 3.7);
               if (fontAdded) {
                 doc.setFont("NotoSansTC", "normal");
-              }
-
-              // 4. Product Name at Bottom of Card (Significantly Larger Font: 10.2pt Bold)
-              const textX = cx + 1.2;
-              const nameStartY = imgY_base + imgBoxH + 3.2;
-              const productNameStr = p.costName || p.name || "";
-
-              if (fontAdded) {
-                doc.setFontSize(10.2);
-                doc.setFont("NotoSansTC", "bold");
-                if (isOutOfStock) {
-                  doc.setTextColor(156, 163, 175);
-                } else {
-                  doc.setTextColor(15, 23, 42);
-                }
-                const wrappedName = doc.splitTextToSize(productNameStr, cardW - 2.4);
-                const line1 = wrappedName[0] || "";
-                let line2 = wrappedName[1] || "";
-                if (wrappedName.length > 2) {
-                  line2 = line2.substring(0, Math.max(0, line2.length - 2)) + "...";
-                }
-                doc.text(line1, textX, nameStartY);
-                if (line2) {
-                  doc.text(line2, textX, nameStartY + 4.4);
-                }
-              } else {
-                const textImg = createCanvasTextDataUrl(
-                  productNameStr,
-                  cardW - 2.4,
-                  isOutOfStock ? "#9ca3af" : "#0f172a"
-                );
-                if (textImg.dataUrl) {
-                  doc.addImage(textImg.dataUrl, "PNG", textX, nameStartY - 1.2, textImg.widthMm, textImg.heightMm);
-                }
               }
             });
 
@@ -2164,6 +2271,13 @@ export default function App() {
         if (!res.ok) {
           const errData = await res.json();
           throw new Error(errData.error || "Failed to transfer file.");
+        }
+
+        // Automatically sync copy to Google Drive if connected
+        if (driveToken) {
+          uploadImageToDrive(filename, base64, item.file.type || "image/jpeg").catch(driveErr => {
+            console.warn("Auto-sync to Google Drive warning:", driveErr);
+          });
         }
 
         setUploadFiles(prev => prev.map(u => u.id === item.id ? { ...u, status: "success" } : u));
@@ -3091,6 +3205,20 @@ export default function App() {
 
                 {/* Present Catalog button, Download Salestable button & Lock System Button */}
                 <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                  {/* Cloud & Drive Backup Toolbox Modal Button in Admin Mode */}
+                  <button
+                    onClick={() => setIsDriveModalOpen(true)}
+                    className="px-3 sm:px-4 py-2 rounded-xl border border-blue-200 bg-blue-50/80 hover:bg-blue-100 text-blue-800 font-extrabold text-xs shadow-xs flex items-center gap-1.5 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shrink-0"
+                    title="離線圖庫、ZIP 下載與 Google Drive 同步"
+                  >
+                    <Cloud className="w-3.5 h-3.5 text-blue-600" />
+                    <span className="hidden sm:inline">圖庫與 Drive 備份</span>
+                    <span className="sm:hidden">Drive</span>
+                    {driveUser && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white"></span>
+                    )}
+                  </button>
+
                   {/* 來貨記錄 Button on the left side of Download Salestable */}
                   <button
                     onClick={() => {
@@ -3603,6 +3731,20 @@ export default function App() {
                   <span className="hidden sm:inline">{syncing ? "同步中..." : "同步數據"}</span>
                 </button>
 
+                {/* Cloud & Drive Backup Toolbox Modal Button */}
+                <button
+                  onClick={() => setIsDriveModalOpen(true)}
+                  className="px-3 sm:px-3.5 py-2.5 rounded-xl border border-blue-200 bg-blue-50/80 hover:bg-blue-100 text-blue-800 font-extrabold text-xs shadow-xs flex items-center gap-1.5 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shrink-0"
+                  title="離線圖庫、ZIP 下載與 Google Drive 同步"
+                >
+                  <Cloud className="w-4 h-4 text-blue-600" />
+                  <span className="hidden sm:inline">圖庫與 Drive 備份</span>
+                  <span className="sm:hidden">Drive</span>
+                  {driveUser && (
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white"></span>
+                  )}
+                </button>
+
                 {/* 來貨記錄 Button on the left side of Download Salestable */}
                 <button
                   onClick={() => {
@@ -3914,6 +4056,118 @@ export default function App() {
               </h3>
 
               <div className="space-y-3">
+                {/* Server Permanent Image Archive & Download (Plan B+) */}
+                <div className="bg-slate-50 rounded-xl p-3 border border-slate-150 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                      <Archive className="w-3.5 h-3.5 text-blue-600" />
+                      伺服器永久圖庫 (B+ 方案)
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-bold bg-white px-1.5 py-0.5 rounded border border-slate-200">
+                      本地已存 {serverBackupStatus?.localFileCount ?? 0} 張
+                    </span>
+                  </div>
+
+                  <p className="text-[10px] text-slate-500 leading-normal">
+                    自動將所有 Boutir 圖片下載並以商品 ID（如 <code className="text-slate-700 bg-slate-200/60 px-1 rounded">id-XXXX.jpg</code>）永久保存於後端，供其他 App 隨時抓取，或一鍵打包下載至 Google Drive！
+                  </p>
+
+                  {serverBackupStatus?.isRunning ? (
+                    <div className="space-y-1.5 pt-1">
+                      <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                        <div 
+                          className="bg-blue-600 h-full transition-all duration-200" 
+                          style={{ 
+                            width: `${serverBackupStatus.total > 0 ? Math.round((serverBackupStatus.completed / serverBackupStatus.total) * 100) : 10}%` 
+                          }}
+                        ></div>
+                      </div>
+                      <div className="text-[9px] text-blue-600 font-bold flex items-center justify-between animate-pulse">
+                        <span className="truncate max-w-[200px]">{serverBackupStatus.message}</span>
+                        <span>{serverBackupStatus.total > 0 ? `${Math.round((serverBackupStatus.completed / serverBackupStatus.total) * 100)}%` : ""}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+                      <button
+                        onClick={handleStartServerBackup}
+                        className="w-full py-2 px-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[10px] sm:text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer shadow-xs"
+                      >
+                        <RefreshCw className="w-3 h-3 text-blue-100" />
+                        伺服器一鍵封存
+                      </button>
+                      <a
+                        href="/api/backup/images/zip"
+                        download
+                        className="w-full py-2 px-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-[10px] sm:text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer shadow-xs text-center"
+                      >
+                        <Download className="w-3 h-3 text-emerald-600" />
+                        下載 ZIP 圖檔包
+                      </a>
+                    </div>
+                  )}
+                </div>
+
+                {/* Google Drive Real-time Sync Card */}
+                <div className="bg-slate-50 rounded-xl p-3 border border-slate-150 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                      <Cloud className="w-3.5 h-3.5 text-emerald-600" />
+                      Google Drive 自動同步
+                    </span>
+                    {driveUser ? (
+                      <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded flex items-center gap-1">
+                        <Check className="w-3 h-3 text-emerald-600" />
+                        已連線
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-400 font-semibold bg-white border border-slate-200 px-1.5 py-0.5 rounded">
+                        未連線
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-[10px] text-slate-500 leading-normal">
+                    連線您的 Google 帳號後，每次透過 App 新增或上傳新商品照片，系統將自動同步上傳一份至您 Google Drive 中的「<span className="text-slate-700 font-bold">億達行商品圖庫</span>」資料夾！
+                  </p>
+
+                  {driveUser ? (
+                    <div className="pt-1 flex items-center justify-between bg-white border border-slate-200/80 rounded-lg p-2">
+                      <div className="flex items-center gap-2 truncate">
+                        {driveUser.photoURL && (
+                          <img src={driveUser.photoURL} alt="avatar" className="w-5 h-5 rounded-full" />
+                        )}
+                        <div className="truncate text-left">
+                          <div className="text-[10px] font-bold text-slate-700 truncate">{driveUser.displayName || "Google 帳號"}</div>
+                          <div className="text-[9px] text-slate-400 truncate">{driveUser.email}</div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={handleDisconnectDrive}
+                        className="px-2 py-1 text-[10px] font-medium text-slate-500 hover:text-red-600 border border-slate-200 hover:border-red-200 rounded transition-colors shrink-0 cursor-pointer"
+                      >
+                        中斷
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="pt-1">
+                      <button
+                        onClick={handleConnectDrive}
+                        disabled={isDriveConnecting}
+                        className="w-full py-2 px-3 bg-white border border-slate-300 hover:border-slate-400 text-slate-700 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs disabled:opacity-50"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 48 48">
+                          <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                          <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                          <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                          <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+                        </svg>
+                        {isDriveConnecting ? "連線授權中..." : "連結 Google Drive 自動儲存"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 {/* Image Pre-cacher */}
                 <div className="bg-slate-50 rounded-xl p-3 border border-slate-150 space-y-2">
                   <div className="flex items-center justify-between">
@@ -7143,6 +7397,162 @@ function revertStockForOrders(orderIdsMap) {
         </div>
       )}
 
+      {/* Dedicated Cloud Library & Google Drive Backup Modal */}
+      {isDriveModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col animate-slideUp">
+            {/* Modal Header */}
+            <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-blue-500/20 border border-blue-400/30 flex items-center justify-center">
+                  <Cloud className="w-4 h-4 text-blue-400" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-white tracking-tight">離線圖庫與 Google Drive 同步</h3>
+                  <p className="text-[10px] text-slate-300">商品圖片永久備份、打包下載與雲端自動同步</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsDriveModalOpen(false)}
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
+              {/* Section 1: Google Drive Real-time Sync */}
+              <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <Cloud className="w-4 h-4 text-emerald-600" />
+                    Google Drive 自動備份
+                  </span>
+                  {driveUser ? (
+                    <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/70 border border-emerald-300 px-2 py-0.5 rounded-md flex items-center gap-1">
+                      <Check className="w-3 h-3 text-emerald-600" />
+                      已連線同步
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-slate-500 font-semibold bg-white border border-slate-200 px-2 py-0.5 rounded-md">
+                      尚未連結
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  連結您的 Google Drive 後，日後在 App 內新增或更換商品照片時，系統會<strong>自動上傳一份到 Google Drive</strong> 的「<strong>億達行商品圖庫 (Product Images)</strong>」資料夾，永久安全備份！
+                </p>
+
+                {driveUser ? (
+                  <div className="flex items-center justify-between bg-white border border-slate-200 rounded-xl p-3">
+                    <div className="flex items-center gap-2.5 truncate">
+                      {driveUser.photoURL ? (
+                        <img src={driveUser.photoURL} alt="avatar" className="w-7 h-7 rounded-full" />
+                      ) : (
+                        <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-xs">G</div>
+                      )}
+                      <div className="truncate text-left">
+                        <div className="text-xs font-bold text-slate-800 truncate">{driveUser.displayName || "Google 帳號"}</div>
+                        <div className="text-[10px] text-slate-500 truncate">{driveUser.email}</div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleDisconnectDrive}
+                      className="px-2.5 py-1 text-xs font-medium text-slate-600 hover:text-red-600 border border-slate-200 hover:border-red-200 rounded-lg transition-colors shrink-0 cursor-pointer"
+                    >
+                      中斷連結
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <button
+                      onClick={handleConnectDrive}
+                      disabled={isDriveConnecting}
+                      className="w-full py-2.5 px-4 bg-white border border-slate-300 hover:border-slate-400 text-slate-800 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs hover:shadow-sm disabled:opacity-50"
+                    >
+                      <svg className="w-4 h-4" viewBox="0 0 48 48">
+                        <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                        <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                        <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                        <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+                      </svg>
+                      {isDriveConnecting ? "連線授權中..." : "立即連結 Google Drive 雲端儲存"}
+                    </button>
+                    <p className="text-[10px] text-slate-400 text-center leading-relaxed">
+                      💡 若瀏覽器彈出「已封鎖彈出式視窗」，請點擊網址列右側允許彈出視窗，或點選頂部「新分頁開啟」再點擊連線。
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Section 2: Server Permanent Image Archive (Plan B+) */}
+              <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <Archive className="w-4 h-4 text-blue-600" />
+                    伺服器永久圖庫與 ZIP 下載 (B+ 方案)
+                  </span>
+                  <span className="text-[10px] text-slate-600 font-bold bg-white px-2 py-0.5 rounded border border-slate-200">
+                    本地已保存 {serverBackupStatus?.localFileCount ?? 0} 張
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  系統自動將商品圖片以商品 ID（例如 <code className="text-slate-800 bg-slate-200/70 px-1 py-0.5 rounded font-mono text-[11px]">id-XXXX.jpg</code>）封存於伺服器。您可隨時打包下載整包 ZIP，解壓縮後即可直接丟入 Google Drive 或供其他 App 抓取。
+                </p>
+
+                {serverBackupStatus?.isRunning ? (
+                  <div className="space-y-2 pt-1">
+                    <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
+                      <div 
+                        className="bg-blue-600 h-full transition-all duration-200" 
+                        style={{ 
+                          width: `${serverBackupStatus.total > 0 ? Math.round((serverBackupStatus.completed / serverBackupStatus.total) * 100) : 10}%` 
+                        }}
+                      ></div>
+                    </div>
+                    <div className="text-[11px] text-blue-600 font-bold flex items-center justify-between animate-pulse">
+                      <span className="truncate max-w-[280px]">{serverBackupStatus.message}</span>
+                      <span>{serverBackupStatus.total > 0 ? `${Math.round((serverBackupStatus.completed / serverBackupStatus.total) * 100)}%` : ""}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                    <button
+                      onClick={handleStartServerBackup}
+                      className="w-full py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-blue-100" />
+                      重新校對並封存全部圖片
+                    </button>
+                    <a
+                      href="/api/backup/images/zip"
+                      download
+                      className="w-full py-2.5 px-3 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs text-center"
+                    >
+                      <Download className="w-3.5 h-3.5 text-emerald-600" />
+                      下載 ZIP 圖檔壓縮包
+                    </a>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-5 py-3 bg-slate-100 border-t border-slate-200 flex justify-end">
+              <button
+                onClick={() => setIsDriveModalOpen(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl transition-all cursor-pointer"
+              >
+                完成 / 關閉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* High-Fidelity PDF / Print Catalog Preview Modal */}
       {isPreviewingPdfPrint && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex flex-col overflow-y-auto p-4 sm:p-6 md:p-10">
@@ -7261,7 +7671,7 @@ function revertStockForOrders(orderIdsMap) {
                             }`}
                             style={!p.hasStock ? undefined : hasCategoryLabel ? { borderColor: "#d4af37", borderWidth: "1.5px" } : undefined}
                           >
-                            {/* Photo Container with Category hovering at top-left & Price hovering at bottom-left */}
+                            {/* Photo Container with Category hovering at top-left */}
                             <div className="w-full aspect-[4/5] rounded-lg bg-slate-50 border border-slate-150 overflow-hidden shrink-0 relative">
                               <ProductImage
                                 id={p.id}
@@ -7279,13 +7689,13 @@ function revertStockForOrders(orderIdsMap) {
                                   {p.costCategoryName || catName}
                                 </div>
                               )}
-                              <div className="absolute bottom-1.5 left-1.5 z-10 bg-white/95 backdrop-blur-xs text-slate-900 border border-slate-200/80 px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-black shadow-2xs">
-                                {priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : "請詢價"}
-                              </div>
                             </div>
                             {/* Info */}
-                            <div className="pt-1.5 px-0.5 min-w-0">
+                            <div className="pt-1.5 px-0.5 min-w-0 flex flex-col justify-between flex-1">
                               <h4 className="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">{p.costName || p.name}</h4>
+                              <div className="mt-1.5 self-start bg-slate-50 text-slate-900 border border-slate-200 px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-bold">
+                                {priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : "請詢價"}
+                              </div>
                             </div>
                           </div>
                         );
@@ -7362,7 +7772,7 @@ function revertStockForOrders(orderIdsMap) {
                     }`}
                     style={!p.hasStock ? undefined : hasCategoryLabel ? { borderColor: "#d4af37", borderWidth: "1.5px" } : undefined}
                   >
-                    {/* Photo Container with Category hovering at top-left & Price hovering at bottom-left */}
+                    {/* Photo Container with Category hovering at top-left */}
                     <div className="w-full aspect-[4/5] rounded-lg bg-slate-50 border border-slate-150 overflow-hidden shrink-0 relative">
                       <ProductImage
                         id={p.id}
@@ -7380,13 +7790,13 @@ function revertStockForOrders(orderIdsMap) {
                           {p.costCategoryName || catName}
                         </div>
                       )}
-                      <div className="absolute bottom-1.5 left-1.5 z-10 bg-white/95 backdrop-blur-xs text-slate-900 border border-slate-200/80 px-1.5 py-0.5 rounded text-[11px] font-black shadow-2xs">
-                        {priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價"}
-                      </div>
                     </div>
                     {/* Info */}
-                    <div className="pt-1.5 px-0.5 min-w-0">
+                    <div className="pt-1.5 px-0.5 min-w-0 flex flex-col justify-between flex-1">
                       <h4 className="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">{p.costName || p.name}</h4>
+                      <div className="mt-1.5 self-start bg-slate-50 text-slate-900 border border-slate-200 px-1.5 py-0.5 rounded text-[11px] font-bold">
+                        {priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價"}
+                      </div>
                     </div>
                   </div>
                 );
