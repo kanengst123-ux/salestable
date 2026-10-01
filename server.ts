@@ -971,13 +971,13 @@ app.get("/api/backup/images/zip", (req, res) => {
   archive.finalize();
 });
 
-// Explicit API endpoints for retrieving product image by ID
+// Explicit API endpoints for retrieving product image by ID or Product Name
 app.get(["/api/products/:id/image", "/api/images/:id"], async (req, res) => {
-  const rawId = req.params.id || "";
+  const rawId = decodeURIComponent(req.params.id || "").trim();
   const cleanId = rawId.replace(/^(id[-_])?/i, "").replace(/\.(jpg|jpeg|png|webp)$/i, "");
   const publicDir = path.join(process.cwd(), "public");
 
-  // Candidates filename
+  // 1. Direct candidates filename in public/
   const candidates = [
     `id-${cleanId}.jpg`,
     `id-${cleanId}.jpeg`,
@@ -1001,12 +1001,73 @@ app.get(["/api/products/:id/image", "/api/images/:id"], async (req, res) => {
     }
   }
 
-  // Next, try on-demand fetch from Sheet15 or Products cache
+  // 2. Look up product in productsCache or fetch from Google Sheet
+  try {
+    const products = await fetchProductsFromSheet();
+    // Match by ID first, then by Title/Name if query wasn't an exact ID
+    let matchedProduct = products.find(p => {
+      const pClean = p.id.replace(/^(id[-_])?/i, "");
+      return p.id.toLowerCase() === rawId.toLowerCase() || 
+             pClean.toLowerCase() === cleanId.toLowerCase() ||
+             p.id.toLowerCase() === `id-${cleanId}`.toLowerCase();
+    });
+
+    if (!matchedProduct) {
+      // Try match by product name / title (exact or trimmed)
+      matchedProduct = products.find(p => {
+        return p.name.trim().toLowerCase() === rawId.toLowerCase() ||
+               p.name.trim().toLowerCase().includes(rawId.toLowerCase()) ||
+               rawId.toLowerCase().includes(p.name.trim().toLowerCase());
+      });
+    }
+
+    if (matchedProduct) {
+      const mCleanId = matchedProduct.id.replace(/^(id[-_])?/i, "");
+      const matchedLocalPath = path.join(publicDir, `id-${mCleanId}.jpg`);
+
+      // Check if matched product already has a file
+      if (fs.existsSync(matchedLocalPath) && fs.statSync(matchedLocalPath).size > 0) {
+        res.setHeader("Content-Type", "image/jpeg");
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        return res.sendFile(matchedLocalPath);
+      }
+
+      // If no local file yet, fetch from product's Image URLs
+      const imgUrl = matchedProduct.extraAttributes?.["Image URLs"] || 
+                     (matchedProduct.allValues ? matchedProduct.allValues[38] : "");
+      if (imgUrl && String(imgUrl).startsWith("http")) {
+        const fetchRes = await fetch(String(imgUrl).trim(), {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+          }
+        });
+        if (fetchRes.ok) {
+          const buf = Buffer.from(await fetchRes.arrayBuffer());
+          if (buf.length > 0) {
+            fs.writeFileSync(matchedLocalPath, buf);
+            res.setHeader("Content-Type", "image/jpeg");
+            res.setHeader("Cache-Control", "public, max-age=31536000");
+            return res.send(buf);
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error("Error during product image lookup:", err.message);
+  }
+
+  // 3. Next, try on-demand fetch from Sheet15 mapping
   try {
     const sheet15Map = await getSheet15ImageMap();
     const imgUrl = sheet15Map.get(rawId.toLowerCase()) || sheet15Map.get(`id-${cleanId}`.toLowerCase()) || sheet15Map.get(cleanId.toLowerCase());
     if (imgUrl) {
-      const fetchRes = await fetch(imgUrl);
+      const fetchRes = await fetch(imgUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "image/*,*/*;q=0.8"
+        }
+      });
       if (fetchRes.ok) {
         const buf = Buffer.from(await fetchRes.arrayBuffer());
         if (buf.length > 0) {

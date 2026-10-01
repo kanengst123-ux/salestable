@@ -4431,22 +4431,52 @@ export default function App() {
             className="bg-white rounded-3xl max-w-3xl w-full max-h-[90vh] overflow-y-auto shadow-2xl relative border border-slate-100 animate-slideUp flex flex-col md:flex-row"
           >
             {isEditingSelectedProduct ? (
-              <form onSubmit={handleUpdateProductSubmit} className="w-full flex flex-col md:flex-row">
-                {/* Modal Exit cross */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsEditingSelectedProduct(false);
-                    setSelectedProduct(null);
-                  }}
-                  className="absolute top-4 right-4 p-2 rounded-full bg-white/85 hover:bg-slate-100 text-slate-800 transition-all z-20 shadow-md border border-slate-100"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+              <form onSubmit={handleUpdateProductSubmit} className="w-full flex flex-col md:flex-row relative">
+                {/* Floating Top Right Action Pill: '儲存修改' and '取消' buttons hover on the top right corner */}
+                <div className="absolute top-3 right-3 sm:top-4 sm:right-4 z-40 flex items-center gap-2 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-2xl shadow-lg border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEditingSelectedProduct(false);
+                      setSelectedProduct(null);
+                    }}
+                    className="py-1.5 px-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold transition-all text-xs cursor-pointer shadow-2xs"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isUpdatingProduct}
+                    className="py-1.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold shadow-sm hover:shadow transition-all flex items-center gap-1.5 text-xs cursor-pointer disabled:opacity-50"
+                  >
+                    {isUpdatingProduct ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
+                        <span>儲存中...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-white" />
+                        <span>儲存修改</span>
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEditingSelectedProduct(false);
+                      setSelectedProduct(null);
+                    }}
+                    className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-all cursor-pointer ml-0.5"
+                    title="關閉"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
 
-                {/* Left Col: Photo Display within modal */}
-                <div className="md:w-1/2 aspect-square bg-slate-50 p-6 relative border-r border-slate-100 shrink-0 flex flex-col items-center justify-center">
-                  <div className="w-full aspect-square rounded-2xl border-2 border-slate-100 bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 relative">
+                {/* Left Col: Photo Display within modal (reduced to 50% size) */}
+                <div className="md:w-64 bg-slate-50/70 p-5 relative border-b md:border-b-0 md:border-r border-slate-100 shrink-0 flex flex-col items-center justify-center">
+                  <div className="w-36 h-36 sm:w-44 sm:h-44 aspect-square rounded-2xl border-2 border-slate-200/80 bg-slate-100 flex items-center justify-center overflow-hidden shrink-0 relative shadow-inner">
                     {editProductImagePreview ? (
                       <img 
                         src={editProductImagePreview} 
@@ -4464,11 +4494,11 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="mt-4 flex flex-col items-center gap-2">
+                  <div className="mt-3 flex flex-col items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => document.getElementById("edit-product-file-input")?.click()}
-                      className="py-1.5 px-3 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-all text-xs font-bold flex items-center gap-1.5"
+                      className="py-1.5 px-3 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-all text-xs font-bold flex items-center gap-1.5 shadow-2xs cursor-pointer"
                     >
                       <Upload className="w-3.5 h-3.5 text-indigo-600" />
                       更換圖片
@@ -4489,6 +4519,14 @@ export default function App() {
                 {/* Right Col: Complex attributes listing */}
                 <div className="p-6 md:p-8 flex flex-col justify-between flex-grow overflow-y-auto max-h-[85vh]">
                   <div className="space-y-4">
+                    {/* Header title & ID badge */}
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-100 pr-0 md:pr-48">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">編輯商品資訊</span>
+                        <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-bold">{selectedProduct.id}</span>
+                      </div>
+                    </div>
+
                     {/* Product Name Input */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
@@ -4503,25 +4541,40 @@ export default function App() {
                       />
                     </div>
 
-                    {/* Pricing Input: Single Price */}
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                        單價 (HK$)
-                      </label>
-                      <input 
-                        type="text"
-                        placeholder="例如：61"
-                        value={editProductPrice}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setEditProductPrice(val);
-                        }}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3 py-2.5 text-xs transition-all outline-none font-mono"
-                      />
+                    {/* Pricing Input & Stock Quantity Input: Horizontally Aligned */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          單價 (HK$)
+                        </label>
+                        <input 
+                          type="text"
+                          placeholder="例如：61"
+                          value={editProductPrice}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setEditProductPrice(val);
+                          }}
+                          className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3.5 py-2.5 text-xs transition-all outline-none font-mono font-bold"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                          庫存狀態 / 數量
+                        </label>
+                        <input 
+                          type="text"
+                          placeholder="例如：39（留空代表長期充足）"
+                          value={editProductQuantity}
+                          onChange={(e) => setEditProductQuantity(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3.5 py-2.5 text-xs transition-all outline-none font-semibold font-mono"
+                        />
+                      </div>
                     </div>
 
-                    {/* Tier A, B, C Member Discounted Prices */}
-                    <div className="bg-slate-50/70 p-3.5 rounded-2xl border border-slate-100 space-y-2">
+                    {/* Tier A, B, C Member Discounted Prices (Always horizontally aligned side-by-side) */}
+                    <div className="bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/80 space-y-2">
                       <div className="flex items-center justify-between">
                         <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider">
                           分級會員價格 (HK$)
@@ -4530,44 +4583,44 @@ export default function App() {
                           Col R / S / T
                         </span>
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                        <div>
-                          <label className="block text-[10px] font-bold text-amber-700 mb-1 flex items-center justify-between">
-                            <span>Tier A (GOLD)</span>
-                            <span className="text-slate-400 text-[9px] font-mono">Col R</span>
+                      <div className="grid grid-cols-3 gap-2 sm:gap-2.5">
+                        <div className="bg-white p-2.5 rounded-xl border border-amber-200/80 shadow-2xs">
+                          <label className="block text-[10px] font-bold text-amber-800 mb-1 flex items-center justify-between">
+                            <span className="truncate">Tier A (Gold)</span>
+                            <span className="text-slate-400 text-[8px] font-mono shrink-0">Col R</span>
                           </label>
                           <input 
                             type="text"
                             placeholder="例如：58"
                             value={editProductPriceA}
                             onChange={(e) => setEditProductPriceA(e.target.value)}
-                            className="w-full bg-white border border-slate-200 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-slate-900 rounded-xl px-3 py-2 text-xs transition-all outline-none font-mono"
+                            className="w-full bg-amber-50/20 border border-slate-200 focus:border-amber-500 focus:bg-white focus:ring-1 focus:ring-amber-500 text-slate-900 rounded-lg px-2.5 py-1.5 text-xs transition-all outline-none font-mono font-bold"
                           />
                         </div>
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-600 mb-1 flex items-center justify-between">
-                            <span>Tier B (SILVER)</span>
-                            <span className="text-slate-400 text-[9px] font-mono">Col S</span>
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-300/80 shadow-2xs">
+                          <label className="block text-[10px] font-bold text-slate-700 mb-1 flex items-center justify-between">
+                            <span className="truncate">Tier B (Silver)</span>
+                            <span className="text-slate-400 text-[8px] font-mono shrink-0">Col S</span>
                           </label>
                           <input 
                             type="text"
                             placeholder="例如：60"
                             value={editProductPriceB}
                             onChange={(e) => setEditProductPriceB(e.target.value)}
-                            className="w-full bg-white border border-slate-200 focus:border-slate-500 focus:ring-1 focus:ring-slate-500 text-slate-900 rounded-xl px-3 py-2 text-xs transition-all outline-none font-mono"
+                            className="w-full bg-slate-50/50 border border-slate-200 focus:border-slate-500 focus:bg-white focus:ring-1 focus:ring-slate-500 text-slate-900 rounded-lg px-2.5 py-1.5 text-xs transition-all outline-none font-mono font-bold"
                           />
                         </div>
-                        <div>
-                          <label className="block text-[10px] font-bold text-indigo-600 mb-1 flex items-center justify-between">
-                            <span>Tier C (Basic)</span>
-                            <span className="text-slate-400 text-[9px] font-mono">Col T</span>
+                        <div className="bg-white p-2.5 rounded-xl border border-indigo-200/80 shadow-2xs">
+                          <label className="block text-[10px] font-bold text-indigo-700 mb-1 flex items-center justify-between">
+                            <span className="truncate">Tier C (Basic)</span>
+                            <span className="text-slate-400 text-[8px] font-mono shrink-0">Col T</span>
                           </label>
                           <input 
                             type="text"
                             placeholder="例如：65"
                             value={editProductPriceC}
                             onChange={(e) => setEditProductPriceC(e.target.value)}
-                            className="w-full bg-white border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-slate-900 rounded-xl px-3 py-2 text-xs transition-all outline-none font-mono"
+                            className="w-full bg-indigo-50/20 border border-slate-200 focus:border-indigo-500 focus:bg-white focus:ring-1 focus:ring-indigo-500 text-slate-900 rounded-lg px-2.5 py-1.5 text-xs transition-all outline-none font-mono font-bold"
                           />
                         </div>
                       </div>
@@ -4576,44 +4629,21 @@ export default function App() {
                       </span>
                     </div>
 
-                    {/* Quantity Input */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                          庫存狀態 / 數量
-                        </label>
-                        <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 flex items-center gap-1">
-                          <PackageCheck className="w-3 h-3 text-emerald-600" />
-                          自動記錄至 Purchase 分頁
-                        </span>
-                      </div>
-                      <input 
-                        type="text"
-                        placeholder="例如：39（留空代表長期充足 / 無限量供應）"
-                        value={editProductQuantity}
-                        onChange={(e) => setEditProductQuantity(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3.5 py-2.5 text-xs transition-all outline-none font-semibold"
-                      />
-                      <div className="mt-1.5 flex items-start gap-1.5 text-[10px] text-slate-500 leading-normal">
+                    {/* Stock Level History Tracking Button & Purchase info */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-start gap-1.5 text-[10px] text-slate-500 leading-normal">
                         <Info className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                        <span>若更改此數值，系統將自動於試算表 <strong>Purchase</strong> 分頁記錄 5 個欄位：<strong>Date</strong>（變動時間）、<strong>Product</strong>（商品名稱）、<strong>Quantity from</strong>（變動前）、<strong>Quantity to</strong>（變動後）、<strong>Net</strong>（變動差額）。</span>
+                        <span>若更改庫存數值，系統將自動於試算表 <strong>Purchase</strong> 分頁記錄異動前/後數值與差額。</span>
                       </div>
-
-                      {/* Stock Level History Tracking Button */}
-                      <div className="pt-2">
-                        <button
-                          id="btn-track-stock-history"
-                          type="button"
-                          onClick={() => setIsStockHistoryModalOpen(true)}
-                          className="w-full flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-blue-600 hover:from-indigo-600 hover:to-blue-700 text-white font-bold text-xs shadow-xs hover:shadow-md transition-all cursor-pointer group"
-                        >
-                          <TrendingUp className="w-4 h-4 text-emerald-300 group-hover:scale-110 transition-transform" />
-                          <span>追蹤庫存異動歷史與趨勢圖表 (Purchase / Trade Log)</span>
-                        </button>
-                        <p className="text-[10px] text-slate-400 mt-1 text-center font-medium">
-                          依時間順序整合 Purchase 庫存異動、Trade_Log 客戶訂單與 Trade_log_admin 管理員開單歷程
-                        </p>
-                      </div>
+                      <button
+                        id="btn-track-stock-history"
+                        type="button"
+                        onClick={() => setIsStockHistoryModalOpen(true)}
+                        className="w-full flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl bg-gradient-to-r from-indigo-500 via-indigo-600 to-blue-600 hover:from-indigo-600 hover:to-blue-700 text-white font-bold text-xs shadow-xs hover:shadow-md transition-all cursor-pointer group"
+                      >
+                        <TrendingUp className="w-4 h-4 text-emerald-300 group-hover:scale-110 transition-transform" />
+                        <span>追蹤庫存異動歷史與趨勢圖表 (Purchase / Trade Log)</span>
+                      </button>
                     </div>
 
                     {/* Remarks Input */}
@@ -4676,8 +4706,11 @@ export default function App() {
                   <div className="mt-8 pt-4 border-t border-slate-150 flex items-center justify-end gap-3">
                     <button
                       type="button"
-                      onClick={() => setIsEditingSelectedProduct(false)}
-                      className="py-2.5 px-4 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold transition-all text-xs"
+                      onClick={() => {
+                        setIsEditingSelectedProduct(false);
+                        setSelectedProduct(null);
+                      }}
+                      className="py-2.5 px-4 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold transition-all text-xs cursor-pointer"
                     >
                       取消
                     </button>
