@@ -493,13 +493,13 @@ export default function App() {
     setSearchQuery(value);
     setCurrentPage(1);
 
+    if (searchScrollTimeoutRef.current) {
+      clearTimeout(searchScrollTimeoutRef.current);
+    }
     if (value.trim().length > 0) {
-      if (searchScrollTimeoutRef.current) {
-        clearTimeout(searchScrollTimeoutRef.current);
-      }
       searchScrollTimeoutRef.current = setTimeout(() => {
         scrollToAdminResults();
-      }, 140);
+      }, 500);
     }
   };
   const [selectedParentCategory, setSelectedParentCategory] = useState<string>("All");
@@ -3130,7 +3130,7 @@ export default function App() {
   }
 
   return (
-    <div id="app-root" className="min-h-screen bg-[#f8fafc] text-indigo-950 font-sans antialiased text-sm">
+    <div id="app-root" className="min-h-screen bg-[#f8fafc] text-indigo-950 font-sans antialiased text-sm overflow-x-hidden w-full max-w-[100vw]">
       {/* Dynamic Toast Portal */}
       {toastMessage && (
         <div className="fixed bottom-6 right-6 bg-slate-900 border border-slate-800 text-white px-4 py-3 rounded-xl shadow-2xl z-50 flex items-center gap-3 animate-bounce">
@@ -3142,8 +3142,8 @@ export default function App() {
       {viewMode === "admin" ? (
         <>
           {/* Admin Header */}
-          <header id="admin-header" className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-slate-100 z-30 transition-all shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-            <div className="max-w-7xl mx-auto px-4 md:px-6 py-2.5 space-y-2">
+          <header id="admin-header" className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-slate-100 z-30 transition-all shadow-[0_1px_3px_rgba(0,0,0,0.02)] w-full max-w-full overflow-hidden">
+            <div className="max-w-7xl mx-auto px-3 sm:px-4 md:px-6 py-2.5 space-y-2">
               
               {/* 1st Row: Product Search Text Box */}
               <div className="relative w-full">
@@ -3154,11 +3154,9 @@ export default function App() {
                   onChange={(e) => handleAdminSearchChange(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      scrollToAdminResults();
-                    }
-                  }}
-                  onFocus={() => {
-                    if (searchQuery.trim().length > 0) {
+                      if (searchScrollTimeoutRef.current) {
+                        clearTimeout(searchScrollTimeoutRef.current);
+                      }
                       scrollToAdminResults();
                     }
                   }}
@@ -3179,93 +3177,82 @@ export default function App() {
                 )}
               </div>
 
-              {/* 2nd Row: The Others (Salestable Title, Logo, Status, and Action Buttons) */}
-              <div className="flex items-center justify-between gap-3">
+              {/* 2nd Row: Title & Action Buttons (Perfect phone width fit, Drive button moved to bottom) */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3">
                 {/* Logo & Salestable Title */}
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-slate-900 flex items-center justify-center shadow-md shadow-slate-200 shrink-0">
-                    <Settings className="w-4.5 h-4.5 text-white animate-spin-slow" style={{ animationDuration: '12s' }} />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h1 className="font-bold text-base text-slate-900 tracking-tight leading-none md:text-lg">
-                        Salestable
-                      </h1>
-                      {syncTime && (
-                        <span className="hidden sm:inline-block text-[10px] font-bold text-slate-500 bg-slate-100 border border-slate-200 rounded-lg px-2 py-0.5" title="最後刷新時間">
-                          最後刷新: {syncTime}
-                        </span>
-                      )}
+                <div className="flex items-center justify-between w-full sm:w-auto">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-slate-900 flex items-center justify-center shadow-md shadow-slate-200 shrink-0">
+                      <Settings className="w-4 h-4 text-white animate-spin-slow" style={{ animationDuration: '12s' }} />
                     </div>
-                    <span className="text-[11px] text-indigo-650 font-bold block mt-0.5">
-                      Google 表格實時同步
-                    </span>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <h1 className="font-bold text-sm sm:text-base text-slate-900 tracking-tight leading-none md:text-lg">
+                          Salestable
+                        </h1>
+                        {syncTime && (
+                          <span className="text-[9px] sm:text-[10px] font-bold text-slate-500 bg-slate-100 border border-slate-200 rounded-lg px-1.5 py-0.5" title="最後刷新時間">
+                            {syncTime}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] sm:text-[11px] text-indigo-600 font-bold block mt-0.5">
+                        Google 表格實時同步
+                      </span>
+                    </div>
                   </div>
                 </div>
 
                 {/* Present Catalog button, Download Salestable button & Lock System Button */}
-                <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-                  {/* Cloud & Drive Backup Toolbox Modal Button in Admin Mode */}
-                  <button
-                    onClick={() => setIsDriveModalOpen(true)}
-                    className="px-3 sm:px-4 py-2 rounded-xl border border-blue-200 bg-blue-50/80 hover:bg-blue-100 text-blue-800 font-extrabold text-xs shadow-xs flex items-center gap-1.5 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shrink-0"
-                    title="離線圖庫、ZIP 下載與 Google Drive 同步"
-                  >
-                    <Cloud className="w-3.5 h-3.5 text-blue-600" />
-                    <span className="hidden sm:inline">圖庫與 Drive 備份</span>
-                    <span className="sm:hidden">Drive</span>
-                    {driveUser && (
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white"></span>
-                    )}
-                  </button>
-
+                <div className="grid grid-cols-4 sm:flex items-center gap-1.5 sm:gap-2.5 w-full sm:w-auto">
                   {/* 來貨記錄 Button on the left side of Download Salestable */}
                   <button
                     onClick={() => {
                       setIsRestockModalOpen(true);
                       setRestockSearch("");
                     }}
-                    className="px-3 sm:px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md shadow-emerald-100 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shrink-0"
+                    className="col-span-1 px-1.5 sm:px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] sm:text-xs shadow-xs flex items-center justify-center gap-1 sm:gap-1.5 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer truncate"
                     title="批次輸入商品來貨數量並更新庫存"
                   >
-                    <PackagePlus className="w-3.5 h-3.5 text-white" />
-                    <span>來貨記錄</span>
+                    <PackagePlus className="w-3.5 h-3.5 text-white shrink-0" />
+                    <span className="truncate">來貨記錄</span>
                   </button>
 
                   <button
                     onClick={handleGenerateJsPdf}
                     disabled={isGeneratingPdf}
-                    className="px-3 sm:px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-md shadow-indigo-100 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer disabled:opacity-60 shrink-0"
+                    className="col-span-1 px-1.5 sm:px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[11px] sm:text-xs shadow-xs flex items-center justify-center gap-1 sm:gap-1.5 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer disabled:opacity-60 truncate"
                     title="下載 Salestable PDF 圖冊"
                   >
                     {isGeneratingPdf ? (
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-white shrink-0" />
                     ) : (
-                      <Download className="w-3.5 h-3.5 text-white" />
+                      <Download className="w-3.5 h-3.5 text-white shrink-0" />
                     )}
                     <span className="hidden sm:inline">{isGeneratingPdf ? "Generating..." : "Download Salestable"}</span>
                     <span className="sm:hidden">PDF</span>
                   </button>
 
                   <button
-                    onClick={handleLogout}
-                    className="p-2 sm:px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
-                    title="登出並鎖定系統"
-                  >
-                    <LogOut className="w-3.5 h-3.5 text-slate-500" />
-                    <span className="hidden sm:inline">鎖定系統</span>
-                  </button>
-                  <button
                     onClick={() => {
                       setSelectedPriceTier("C");
                       setViewMode("customer");
                     }}
-                    className="px-3.5 sm:px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-md shadow-emerald-100 flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] shrink-0"
+                    className="col-span-1 px-1.5 sm:px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] sm:text-xs shadow-xs flex items-center justify-center gap-1 sm:gap-1.5 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer truncate"
                     title="展示用戶端商品圖冊和詢價下單流程"
                   >
-                    <Eye className="w-3.5 h-3.5 text-white" />
+                    <Eye className="w-3.5 h-3.5 text-white shrink-0" />
                     <span className="hidden sm:inline">向客戶展示產品目錄</span>
                     <span className="sm:hidden">展示目錄</span>
+                  </button>
+
+                  <button
+                    onClick={handleLogout}
+                    className="col-span-1 p-2 sm:px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    title="登出並鎖定系統"
+                  >
+                    <LogOut className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <span className="hidden sm:inline">鎖定系統</span>
                   </button>
                 </div>
               </div>
@@ -3273,7 +3260,7 @@ export default function App() {
             </div>
           </header>
 
-          <main className="max-w-7xl mx-auto px-4 md:px-6 py-6 lg:py-8 space-y-6">
+          <main className="max-w-7xl mx-auto px-4 md:px-6 py-6 lg:py-8 space-y-6 w-full max-w-full overflow-hidden">
             {/* Quick Stats Summary row */}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 animate-fadeIn">
               {/* Card 1: 目錄商品總數 */}
@@ -3656,6 +3643,33 @@ export default function App() {
               </div>
 
             </div>
+
+            {/* Admin Bottom Footer with Drive Button */}
+            <footer className="mt-8 bg-white border border-slate-100 rounded-2xl p-4 sm:p-5 shadow-sm">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
+                <div>
+                  <div className="text-xs text-slate-800 font-bold">
+                    Salestable 雲端後台管理系統
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    共 {products.length.toLocaleString()} 款商品 • 包含完整圖片快取與 Google 表格雙向同步
+                  </div>
+                </div>
+
+                {/* Cloud & Drive Backup Toolbox Modal Button at the bottom */}
+                <button
+                  onClick={() => setIsDriveModalOpen(true)}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-blue-200 bg-blue-50/90 hover:bg-blue-100 text-blue-800 font-extrabold text-xs shadow-xs flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shrink-0"
+                  title="離線圖庫、ZIP 下載與 Google Drive 同步"
+                >
+                  <Cloud className="w-4 h-4 text-blue-600" />
+                  <span>圖庫與 Google Drive 備份 (Drive)</span>
+                  {driveUser && (
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white"></span>
+                  )}
+                </button>
+              </div>
+            </footer>
           </main>
         </>
       ) : (
@@ -4398,10 +4412,25 @@ export default function App() {
                   ))}
                 </div>
 
-                {/* Elegant Product Count Footer */}
-                <footer className="mt-10 bg-white border border-slate-100 rounded-2xl p-4 shadow-sm text-center">
-                  <div className="text-xs text-slate-500 font-bold">
-                    已載入全部商品（共 {processedProducts.length.toLocaleString()} 款商品）
+                {/* Elegant Product Count Footer with Drive Button */}
+                <footer className="mt-10 bg-white border border-slate-100 rounded-2xl p-4 sm:p-5 shadow-sm">
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
+                    <div className="text-xs text-slate-500 font-bold">
+                      已載入全部商品（共 {processedProducts.length.toLocaleString()} 款商品）
+                    </div>
+
+                    {/* Cloud & Drive Backup Toolbox Modal Button at the bottom */}
+                    <button
+                      onClick={() => setIsDriveModalOpen(true)}
+                      className="w-full sm:w-auto px-4 py-2 rounded-xl border border-blue-200 bg-blue-50/90 hover:bg-blue-100 text-blue-800 font-extrabold text-xs shadow-xs flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer shrink-0"
+                      title="離線圖庫、ZIP 下載與 Google Drive 同步"
+                    >
+                      <Cloud className="w-4 h-4 text-blue-600" />
+                      <span>圖庫與 Google Drive 備份 (Drive)</span>
+                      {driveUser && (
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white"></span>
+                      )}
+                    </button>
                   </div>
                 </footer>
 
