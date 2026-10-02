@@ -51,7 +51,8 @@ import {
   TrendingUp,
   History,
   ArrowRight,
-  CheckSquare
+  CheckSquare,
+  Printer
 } from "lucide-react";
 import { initDriveAuth, googleDriveSignIn, driveLogout, getDriveAccessToken } from "./lib/driveAuth";
 import { uploadImageToDrive } from "./lib/driveSync";
@@ -1887,6 +1888,539 @@ export default function App() {
     }
   };
 
+  // State for generating Stock List PDF (showing name, small pic, stock level only)
+  const [isGeneratingStockPdf, setIsGeneratingStockPdf] = useState<boolean>(false);
+
+  // Generate Stock List PDF (Name, Small Pic, Stock Level ONLY)
+  const handleGenerateStockListPdf = async () => {
+    const targetProducts = tableSelectedProductIds.length > 0
+      ? products.filter(p => tableSelectedProductIds.includes(p.id))
+      : processedProducts;
+
+    if (targetProducts.length === 0) {
+      showToast("目前沒有可匯出的商品清單！");
+      return;
+    }
+
+    try {
+      setIsGeneratingStockPdf(true);
+      showToast(`正在下載字型並準備庫存清單 PDF... (共 ${targetProducts.length} 款商品)`);
+
+      const doc = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+      });
+
+      // 1. Load Font (with in-memory base64 cache support)
+      let fontAdded = false;
+      if (typeof window !== "undefined" && (window as any).__CACHED_NOTO_FONT__) {
+        try {
+          doc.addFileToVFS("NotoSansTC-Regular.ttf", (window as any).__CACHED_NOTO_FONT__);
+          doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "normal");
+          doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "bold");
+          doc.setFont("NotoSansTC", "normal");
+          fontAdded = true;
+        } catch (e) {}
+      }
+
+      if (!fontAdded) {
+        try {
+          const localFontUrl = "/fonts/NotoSansTC-Regular.ttf";
+          const apiFontUrl = "/api/fonts/NotoSansTC-Regular.ttf";
+          const cdnFallbackUrl = "https://fonts.gstatic.com/s/notosanstc/v39/-nFuOG829Oofr2wohFbTp9ifNAn722rq0MXz76Cy_Co.ttf";
+
+          let res: Response | null = null;
+          if (typeof window !== "undefined" && "caches" in window) {
+            try {
+              const cache = await caches.open("product-images-v1");
+              res = (await cache.match(localFontUrl)) || (await cache.match(apiFontUrl)) || (await cache.match(cdnFallbackUrl));
+            } catch (e) {}
+          }
+          if (!res) {
+            try {
+              const r = await fetch(localFontUrl);
+              if (r.ok) res = r;
+            } catch (e) {}
+          }
+          if (!res) {
+            try {
+              const r = await fetch(apiFontUrl);
+              if (r.ok) res = r;
+            } catch (e) {}
+          }
+          if (!res) {
+            try {
+              const controller = new AbortController();
+              const t = setTimeout(() => controller.abort(), 6000);
+              const r = await fetch(cdnFallbackUrl, { signal: controller.signal });
+              clearTimeout(t);
+              if (r.ok) res = r;
+            } catch (e) {}
+          }
+
+          if (res && res.ok) {
+            const fontBlob = await res.blob();
+            const fontBase64 = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => {
+                const resStr = reader.result as string;
+                resolve(resStr.includes(",") ? resStr.split(",")[1] : resStr);
+              };
+              reader.onerror = reject;
+              reader.readAsDataURL(fontBlob);
+            });
+
+            if (typeof window !== "undefined") {
+              (window as any).__CACHED_NOTO_FONT__ = fontBase64;
+            }
+
+            doc.addFileToVFS("NotoSansTC-Regular.ttf", fontBase64);
+            doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "normal");
+            doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "bold");
+            doc.setFont("NotoSansTC", "normal");
+            fontAdded = true;
+          }
+        } catch (fErr) {
+          console.warn("Font loading fallback in stock PDF:", fErr);
+        }
+      }
+
+      // 2. Fetch small thumbnails
+      showToast(`正在載入商品縮圖... (共 ${targetProducts.length} 款)`);
+      const fetchThumbBase64 = async (prod: Product): Promise<{ base64: string, format: string, width: number, height: number } | null> => {
+        try {
+          if (typeof window !== "undefined") {
+            const cached = (window as any).__RESOLVED_BASE64_CACHE__?.[prod.id];
+            if (cached) return cached;
+          }
+
+          const cleanId = prod.id.replace(/^(id[-_])?/i, "");
+          const fallbackRaw = prod.extraAttributes?.["Image URLs"]?.trim() || "";
+          const fallbackUrls = fallbackRaw.split(/[,\n]/).map(u => u.trim()).filter(Boolean);
+
+          const candidateUrls: string[] = [];
+          if (typeof window !== "undefined" && (window as any).__RESOLVED_IMAGES__?.[prod.id]) {
+            candidateUrls.push((window as any).__RESOLVED_IMAGES__[prod.id]);
+          }
+          const possibleNames = [`id-${cleanId}.jpg`, `id-${cleanId}.jpeg`, `id-${cleanId}.png`, `${cleanId}.jpg`, `${cleanId}.png`];
+          for (const name of possibleNames) {
+            if (publicImageFiles.has(name)) {
+              candidateUrls.push(`/${name}`);
+            }
+          }
+          for (const u of fallbackUrls) {
+            candidateUrls.push(u);
+          }
+
+          for (const url of candidateUrls) {
+            try {
+              // Try Cache API first for instant offline loading
+              if (typeof window !== "undefined" && "caches" in window) {
+                try {
+                  const cache = await caches.open("product-images-v1");
+                  const matched = await cache.match(url, { ignoreSearch: true });
+                  if (matched) {
+                    const contentType = matched.headers.get("content-type");
+                    if (!contentType || !contentType.includes("text/html")) {
+                      const blob = await matched.blob();
+                      const thumbRes = await new Promise<{ base64: string, format: string, width: number, height: number } | null>((resolve) => {
+                        const img = new Image();
+                        const objUrl = URL.createObjectURL(blob);
+                        const t = setTimeout(() => {
+                          URL.revokeObjectURL(objUrl);
+                          resolve(null);
+                        }, 2500);
+                        img.onload = () => {
+                          clearTimeout(t);
+                          URL.revokeObjectURL(objUrl);
+                          const canvas = document.createElement("canvas");
+                          canvas.width = 120;
+                          canvas.height = 120;
+                          const ctx = canvas.getContext("2d");
+                          if (ctx) {
+                            ctx.drawImage(img, 0, 0, 120, 120);
+                            const dUrl = canvas.toDataURL("image/jpeg", 0.7);
+                            if (dUrl.includes(",")) {
+                              resolve({
+                                base64: dUrl.split(",")[1],
+                                format: "JPEG",
+                                width: img.width || 120,
+                                height: img.height || 120
+                              });
+                              return;
+                            }
+                          }
+                          resolve(null);
+                        };
+                        img.onerror = () => {
+                          clearTimeout(t);
+                          URL.revokeObjectURL(objUrl);
+                          resolve(null);
+                        };
+                        img.src = objUrl;
+                      });
+                      if (thumbRes) {
+                        if (typeof window !== "undefined") {
+                          (window as any).__RESOLVED_BASE64_CACHE__ = (window as any).__RESOLVED_BASE64_CACHE__ || {};
+                          (window as any).__RESOLVED_BASE64_CACHE__[prod.id] = thumbRes;
+                        }
+                        return thumbRes;
+                      }
+                    }
+                  }
+                } catch (cErr) {}
+              }
+
+              // Network fetch with timeout
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 1500);
+              const res = await fetch(url, { signal: controller.signal });
+              clearTimeout(timer);
+              if (res.ok) {
+                const blob = await res.blob();
+                return await new Promise((resolve) => {
+                  const img = new Image();
+                  const objUrl = URL.createObjectURL(blob);
+                  const t = setTimeout(() => {
+                    URL.revokeObjectURL(objUrl);
+                    resolve(null);
+                  }, 2500);
+                  img.onload = () => {
+                    clearTimeout(t);
+                    URL.revokeObjectURL(objUrl);
+                    const canvas = document.createElement("canvas");
+                    canvas.width = 120;
+                    canvas.height = 120;
+                    const ctx = canvas.getContext("2d");
+                    if (ctx) {
+                      ctx.drawImage(img, 0, 0, 120, 120);
+                      const dUrl = canvas.toDataURL("image/jpeg", 0.7);
+                      if (dUrl.includes(",")) {
+                        const thumbObj = {
+                          base64: dUrl.split(",")[1],
+                          format: "JPEG",
+                          width: img.width || 120,
+                          height: img.height || 120
+                        };
+                        if (typeof window !== "undefined") {
+                          (window as any).__RESOLVED_BASE64_CACHE__ = (window as any).__RESOLVED_BASE64_CACHE__ || {};
+                          (window as any).__RESOLVED_BASE64_CACHE__[prod.id] = thumbObj;
+                        }
+                        resolve(thumbObj);
+                        return;
+                      }
+                    }
+                    resolve(null);
+                  };
+                  img.onerror = () => {
+                    clearTimeout(t);
+                    URL.revokeObjectURL(objUrl);
+                    resolve(null);
+                  };
+                  img.src = objUrl;
+                });
+              }
+            } catch (e) {}
+          }
+          return null;
+        } catch (e) {
+          return null;
+        }
+      };
+
+      const resolvedItems: { product: Product; imgData: { base64: string, format: string, width: number, height: number } | null }[] = [];
+      for (let i = 0; i < targetProducts.length; i += 8) {
+        const chunk = targetProducts.slice(i, i + 8);
+        const resolvedChunk = await Promise.all(
+          chunk.map(async (p) => ({
+            product: p,
+            imgData: await fetchThumbBase64(p)
+          }))
+        );
+        resolvedItems.push(...resolvedChunk);
+      }
+
+      // 3. Render PDF Pages
+      showToast("正在排版產生 PDF 檔案...");
+      const rowsPerPage = 15;
+      const totalPages = Math.ceil(resolvedItems.length / rowsPerPage) || 1;
+      const rowHeight = 16.0;
+      const startRowY = 34.0;
+
+      const drawHeader = (currentPage: number) => {
+        // Main Title
+        if (fontAdded) {
+          doc.setFont("NotoSansTC", "bold");
+          doc.setFontSize(15);
+          doc.setTextColor(15, 23, 42);
+          doc.text("商品庫存清單 (Product Stock List)", 10, 14);
+
+          // Subtitle / Filters
+          doc.setFont("NotoSansTC", "normal");
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          const filterTxt = searchQuery.trim() ? `搜尋條件: 「${searchQuery.trim()}」  •  ` : "";
+          const dateStr = new Date().toLocaleDateString("zh-HK", { year: "numeric", month: "2-digit", day: "2-digit" });
+          doc.text(`${filterTxt}共 ${targetProducts.length} 款商品  •  匯出日期: ${dateStr}`, 10, 20.5);
+        } else {
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(15);
+          doc.setTextColor(15, 23, 42);
+          doc.text("Product Stock List", 10, 14);
+
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          const filterTxt = searchQuery.trim() ? `Search: "${searchQuery.trim()}"  •  ` : "";
+          doc.text(`${filterTxt}Total ${targetProducts.length} items`, 10, 20.5);
+        }
+
+        // Accent Divider line
+        doc.setDrawColor(226, 232, 240);
+        doc.setLineWidth(0.4);
+        doc.line(10, 23.5, 200, 23.5);
+
+        // Table Header Banner
+        const tY = 25.0;
+        const tH = 7.5;
+        doc.setFillColor(241, 245, 249);
+        doc.rect(10, tY, 190, tH, "F");
+
+        doc.setDrawColor(203, 213, 225);
+        doc.setLineWidth(0.2);
+        doc.rect(10, tY, 190, tH, "S");
+
+        doc.setFontSize(8.5);
+        if (fontAdded) {
+          doc.setFont("NotoSansTC", "bold");
+          doc.setTextColor(71, 85, 105);
+          doc.text("#", 16, tY + 5.2, { align: "center" });
+          doc.text("小圖", 31, tY + 5.2, { align: "center" });
+          doc.text("商品名稱 (Product Name)", 44, tY + 5.2);
+          doc.text("庫存狀態 / 數量 (Stock Level)", 175, tY + 5.2, { align: "center" });
+        } else {
+          doc.setFont("helvetica", "bold");
+          doc.setTextColor(71, 85, 105);
+          doc.text("#", 16, tY + 5.2, { align: "center" });
+          doc.text("Image", 31, tY + 5.2, { align: "center" });
+          doc.text("Product Name", 44, tY + 5.2);
+          doc.text("Stock Level", 175, tY + 5.2, { align: "center" });
+        }
+      };
+
+      const drawFooter = (currentPage: number) => {
+        const footerY = 289.0;
+        doc.setDrawColor(226, 232, 240);
+        doc.setLineWidth(0.3);
+        doc.line(10, footerY - 2, 200, footerY - 2);
+
+        doc.setFontSize(8);
+        doc.setTextColor(148, 163, 184);
+        if (fontAdded) {
+          doc.setFont("NotoSansTC", "normal");
+          doc.text("Salestable 庫存管理系統", 10, footerY + 2);
+          doc.text(`第 ${currentPage} 頁 / 共 ${totalPages} 頁`, 105, footerY + 2, { align: "center" });
+          doc.text("僅顯示商品名稱、小圖及庫存狀態", 200, footerY + 2, { align: "right" });
+        } else {
+          doc.setFont("helvetica", "normal");
+          doc.text("Salestable Stock System", 10, footerY + 2);
+          doc.text(`Page ${currentPage} of ${totalPages}`, 105, footerY + 2, { align: "center" });
+          doc.text("Name, Image & Stock Level Only", 200, footerY + 2, { align: "right" });
+        }
+      };
+
+      // Draw each product row
+      let currentPage = 1;
+      drawHeader(currentPage);
+      drawFooter(currentPage);
+
+      for (let i = 0; i < resolvedItems.length; i++) {
+        const rowOnPage = i % rowsPerPage;
+        if (i > 0 && rowOnPage === 0) {
+          doc.addPage();
+          currentPage++;
+          drawHeader(currentPage);
+          drawFooter(currentPage);
+        }
+
+        const item = resolvedItems[i];
+        const p = item.product;
+        const currentY = startRowY + (rowOnPage * rowHeight);
+
+        // 1. Row Background (alternating subtle zebra stripes)
+        if (rowOnPage % 2 === 1) {
+          doc.setFillColor(248, 250, 252);
+        } else {
+          doc.setFillColor(255, 255, 255);
+        }
+        doc.rect(10, currentY, 190, rowHeight, "F");
+
+        // Row bottom border
+        doc.setDrawColor(241, 245, 249);
+        doc.setLineWidth(0.2);
+        doc.line(10, currentY + rowHeight, 200, currentY + rowHeight);
+
+        // 2. Col 1: Index (#)
+        doc.setFontSize(8.5);
+        doc.setFont(fontAdded ? "NotoSansTC" : "helvetica", "normal");
+        doc.setTextColor(148, 163, 184);
+        doc.text(String(i + 1), 16, currentY + 9.5, { align: "center" });
+
+        // 3. Col 2: Small Picture (13mm x 13mm box)
+        const boxX = 24.5;
+        const boxY = currentY + 1.5;
+        const boxSize = 13.0;
+
+        doc.setFillColor(241, 245, 249);
+        doc.roundedRect(boxX, boxY, boxSize, boxSize, 1.2, 1.2, "F");
+        doc.setDrawColor(226, 232, 240);
+        doc.roundedRect(boxX, boxY, boxSize, boxSize, 1.2, 1.2, "S");
+
+        if (item.imgData && item.imgData.base64) {
+          try {
+            let imgW = boxSize;
+            let imgH = boxSize;
+            let imgX = boxX;
+            let imgY = boxY;
+
+            if (item.imgData.width && item.imgData.height) {
+              if (item.imgData.width > item.imgData.height) {
+                imgH = (item.imgData.height / item.imgData.width) * boxSize;
+                imgY = boxY + (boxSize - imgH) / 2;
+              } else {
+                imgW = (item.imgData.width / item.imgData.height) * boxSize;
+                imgX = boxX + (boxSize - imgW) / 2;
+              }
+            }
+
+            doc.addImage(item.imgData.base64, item.imgData.format || "JPEG", imgX, imgY, imgW, imgH);
+          } catch (e) {
+            doc.setFontSize(6.5);
+            doc.setTextColor(148, 163, 184);
+            doc.text("無圖片", boxX + 6.5, boxY + 7.5, { align: "center" });
+          }
+        } else {
+          doc.setFontSize(6.5);
+          doc.setTextColor(148, 163, 184);
+          doc.text("無圖片", boxX + 6.5, boxY + 7.5, { align: "center" });
+        }
+
+        // 4. Col 3: Product Name ONLY (name only - no price, no SKU, no category)
+        const nameX = 42.0;
+        const pName = (p.costName || p.name || "").trim();
+        const maxTextW = 108.0;
+
+        if (fontAdded) {
+          doc.setFont("NotoSansTC", "bold");
+          doc.setFontSize(10.5);
+          doc.setTextColor(15, 23, 42);
+
+          const lines = doc.splitTextToSize(pName, maxTextW);
+          if (lines.length === 1) {
+            doc.text(lines[0], nameX, currentY + 9.5);
+          } else {
+            doc.text(lines[0], nameX, currentY + 6.8);
+            let line2 = lines[1] || "";
+            if (lines.length > 2) {
+              while (doc.getTextWidth(line2 + "...") > maxTextW && line2.length > 1) {
+                line2 = line2.slice(0, -1);
+              }
+              line2 = line2 + "...";
+            }
+            doc.text(line2, nameX, currentY + 11.8);
+          }
+        } else {
+          // Fallback to high-res canvas text if font not loaded
+          const cvs = createCanvasTextDataUrl(pName, maxTextW);
+          if (cvs && cvs.dataUrl) {
+            const h = Math.min(cvs.heightMm, 12);
+            doc.addImage(cvs.dataUrl, "PNG", nameX, currentY + (rowHeight - h) / 2, cvs.widthMm, h);
+          } else {
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(10.5);
+            doc.setTextColor(15, 23, 42);
+            doc.text(pName.slice(0, 45), nameX, currentY + 9.5);
+          }
+        }
+
+        // 5. Col 4: Stock Level Badge (ONLY stock level, NO price)
+        const badgeW = 42.0;
+        const badgeH = 7.0;
+        const badgeX = 154.0;
+        const badgeY = currentY + 4.5;
+
+        let badgeBg = [241, 245, 249];
+        let badgeBorder = [226, 232, 240];
+        let badgeTextColor = [71, 85, 105];
+        let stockText = "暫無現貨 (缺貨)";
+
+        if (p.alwaysStock) {
+          badgeBg = [236, 253, 245];
+          badgeBorder = [167, 243, 208];
+          badgeTextColor = [4, 120, 87];
+          stockText = "長期充足";
+        } else if (p.hasStock) {
+          badgeBg = [240, 253, 244];
+          badgeBorder = [187, 247, 208];
+          badgeTextColor = [21, 128, 61];
+          const qty = p.secondaryStockCount ? p.secondaryStockCount.trim() : "有貨";
+          stockText = !isNaN(Number(qty)) ? `現有庫存: ${qty} 件` : `有現貨 (${qty})`;
+        } else {
+          badgeBg = [255, 241, 242];
+          badgeBorder = [254, 205, 211];
+          badgeTextColor = [190, 18, 60];
+          stockText = "暫無現貨 (缺貨)";
+        }
+
+        doc.setFillColor(badgeBg[0], badgeBg[1], badgeBg[2]);
+        doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.5, 1.5, "F");
+        doc.setDrawColor(badgeBorder[0], badgeBorder[1], badgeBorder[2]);
+        doc.setLineWidth(0.2);
+        doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.5, 1.5, "S");
+
+        doc.setFontSize(8.5);
+        doc.setFont(fontAdded ? "NotoSansTC" : "helvetica", "bold");
+        doc.setTextColor(badgeTextColor[0], badgeTextColor[1], badgeTextColor[2]);
+        doc.text(stockText, badgeX + (badgeW / 2), badgeY + 4.7, { align: "center" });
+      }
+
+      // Outer table border for last page
+      doc.setDrawColor(203, 213, 225);
+      doc.setLineWidth(0.2);
+      const itemsOnLastPage = ((resolvedItems.length - 1) % rowsPerPage) + 1;
+      const lastTableH = (itemsOnLastPage * rowHeight);
+      doc.rect(10, startRowY, 190, lastTableH, "S");
+
+      // 4. Output and download
+      const cleanSearch = searchQuery.trim().replace(/[/\\?%*:|"<>]/g, "_");
+      const searchTag = cleanSearch ? `_${cleanSearch}` : "";
+      const dateTag = new Date().toISOString().slice(0, 10);
+      const filename = `庫存清單${searchTag}_${dateTag}.pdf`;
+
+      try {
+        const pdfBlob = doc.output("blob");
+        const blobUrl = URL.createObjectURL(pdfBlob);
+        const link = document.createElement("a");
+        link.href = blobUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+      } catch (saveErr) {
+        doc.save(filename);
+      }
+
+      showToast(`已成功導出庫存清單 PDF (${targetProducts.length} 款商品)！`);
+    } catch (err) {
+      console.error("Stock PDF export failed:", err);
+      showToast("庫存清單 PDF 產生失敗，請稍後重試。");
+    } finally {
+      setIsGeneratingStockPdf(false);
+    }
+  };
+
   // Photo List and Queue Management
   const [uploadFiles, setUploadFiles] = useState<{
     id: string;
@@ -3272,20 +3806,35 @@ export default function App() {
                       scrollToAdminResults();
                     }
                   }}
-                  className="w-full bg-slate-50 border border-slate-200 hover:bg-slate-100/70 focus:bg-white text-slate-900 focus:border-indigo-400 text-xs sm:text-sm rounded-xl pl-9 pr-8 py-2 sm:py-2.5 outline-none transition-all font-semibold shadow-xs"
+                  className={`w-full bg-slate-50 border border-slate-200 hover:bg-slate-100/70 focus:bg-white text-slate-900 focus:border-indigo-400 text-xs sm:text-sm rounded-xl pl-9 ${searchQuery ? "pr-28 sm:pr-36" : "pr-8"} py-2 sm:py-2.5 outline-none transition-all font-semibold shadow-xs`}
                 />
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 sm:top-3 pointer-events-none" />
                 {searchQuery && (
-                  <button
-                    onClick={() => {
-                      setSearchQuery("");
-                      setCurrentPage(1);
-                    }}
-                    className="absolute right-2.5 top-2 sm:top-2.5 p-1 text-slate-400 hover:text-slate-600 rounded-md cursor-pointer transition-colors"
-                    title="清除搜尋"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
+                  <div className="absolute right-2 top-1.5 sm:top-2 flex items-center gap-1.5">
+                    <button
+                      onClick={handleGenerateStockListPdf}
+                      disabled={isGeneratingStockPdf || processedProducts.length === 0}
+                      className="px-2 py-1 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-[10px] sm:text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors shadow-xs disabled:opacity-50"
+                      title="產生目前關鍵字搜尋結果的 PDF (僅名稱、小圖及庫存量)"
+                    >
+                      {isGeneratingStockPdf ? (
+                        <RefreshCw className="w-3 h-3 animate-spin text-amber-400" />
+                      ) : (
+                        <FileText className="w-3 h-3 text-amber-400" />
+                      )}
+                      <span>匯出搜尋 PDF</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSearchQuery("");
+                        setCurrentPage(1);
+                      }}
+                      className="p-1 text-slate-400 hover:text-slate-600 rounded-md cursor-pointer transition-colors"
+                      title="清除搜尋"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -3669,6 +4218,19 @@ export default function App() {
                         <X className="w-3 h-3 shrink-0" />
                       </button>
                     )}
+                    <button
+                      onClick={handleGenerateStockListPdf}
+                      disabled={isGeneratingStockPdf || processedProducts.length === 0}
+                      className="text-xs bg-slate-900 hover:bg-slate-800 active:scale-[0.98] text-white px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all disabled:opacity-50"
+                      title={searchQuery.trim() ? "產生目前關鍵字搜尋結果的 PDF (僅包含商品名稱、小圖及庫存量)" : "產生庫存清單 PDF (僅包含商品名稱、小圖及庫存量)"}
+                    >
+                      {isGeneratingStockPdf ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                      ) : (
+                        <FileText className="w-3.5 h-3.5 text-amber-400" />
+                      )}
+                      <span>{isGeneratingStockPdf ? "產生中..." : searchQuery.trim() ? "匯出搜尋 PDF" : "匯出庫存清單 PDF"}</span>
+                    </button>
                   </div>
                 </div>
 
@@ -3807,6 +4369,20 @@ export default function App() {
                         className="px-2.5 py-1 rounded-lg text-emerald-100 hover:text-white text-xs underline cursor-pointer"
                       >
                         清空勾選
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleGenerateStockListPdf}
+                        disabled={isGeneratingStockPdf}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-900/80 hover:bg-emerald-950 text-white font-bold text-xs shadow-xs transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                        title="產生勾選商品的 PDF (僅名稱、小圖及庫存量)"
+                      >
+                        {isGeneratingStockPdf ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-300" />
+                        ) : (
+                          <FileText className="w-3.5 h-3.5 text-amber-300" />
+                        )}
+                        <span>{isGeneratingStockPdf ? "產生中..." : `匯出勾選 PDF (${tableSelectedProductIds.length})`}</span>
                       </button>
                       <button
                         type="button"
@@ -4048,18 +4624,35 @@ export default function App() {
                     setSearchQuery(e.target.value);
                     setCurrentPage(1);
                   }}
-                  className="w-full bg-slate-50 border border-slate-200 focus:border-slate-400 focus:bg-white text-slate-900 rounded-xl pl-9.5 pr-4 py-2.5 text-xs transition-all outline-none font-semibold"
+                  className={`w-full bg-slate-50 border border-slate-200 focus:border-slate-400 focus:bg-white text-slate-900 rounded-xl pl-9.5 ${searchQuery ? "pr-8" : "pr-4"} py-2.5 text-xs transition-all outline-none font-semibold`}
                 />
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                 {searchQuery && (
                   <button 
                     onClick={() => setSearchQuery("")}
                     className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 transition-all font-bold"
+                    title="清除搜尋"
                   >
                     <X className="w-4 h-4" />
                   </button>
                 )}
               </div>
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={handleGenerateStockListPdf}
+                  disabled={isGeneratingStockPdf || processedProducts.length === 0}
+                  className="w-full py-2 px-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50 animate-fadeIn"
+                  title="產生關鍵字搜尋結果的 PDF (僅名稱、小圖及庫存量)"
+                >
+                  {isGeneratingStockPdf ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                  ) : (
+                    <FileText className="w-3.5 h-3.5 text-amber-400" />
+                  )}
+                  <span className="truncate">{isGeneratingStockPdf ? "產生中..." : `匯出「${searchQuery}」搜尋 PDF (${processedProducts.length})`}</span>
+                </button>
+              )}
             </div>
 
             {/* Parent Category List Filter - Dropdown Button Version */}
@@ -4426,6 +5019,20 @@ export default function App() {
                       )}
                       <span>{isGeneratingPdf ? "正在產生 PDF..." : "Download Salestable"}</span>
                     </button>
+
+                    <button
+                      onClick={handleGenerateStockListPdf}
+                      disabled={isGeneratingStockPdf || processedProducts.length === 0}
+                      className="w-full py-2 px-3 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                      title="產生目前商品清單的 PDF (僅名稱、小圖及庫存量)"
+                    >
+                      {isGeneratingStockPdf ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                      ) : (
+                        <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                      )}
+                      <span>{isGeneratingStockPdf ? "正在產生庫存 PDF..." : searchQuery.trim() ? "產生搜尋清單 PDF (名稱/小圖/庫存)" : "產生庫存清單 PDF (僅名稱/小圖/庫存)"}</span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -4471,6 +5078,20 @@ export default function App() {
                     <option value="id-asc">商品 ID (編號大小)</option>
                   </select>
                 </div>
+
+                <button
+                  onClick={handleGenerateStockListPdf}
+                  disabled={isGeneratingStockPdf || processedProducts.length === 0}
+                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                  title="產生目前搜尋/篩選商品清單的 PDF (僅顯示商品名稱、小圖及庫存量)"
+                >
+                  {isGeneratingStockPdf ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                  ) : (
+                    <FileText className="w-3.5 h-3.5 text-amber-400" />
+                  )}
+                  <span>{isGeneratingStockPdf ? "產生中..." : searchQuery.trim() ? "產生搜尋清單 PDF" : "匯出庫存清單 PDF"}</span>
+                </button>
 
               </div>
 
