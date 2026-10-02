@@ -7201,31 +7201,31 @@ function revertStockForOrders(orderIdsMap) {
       {/* Restock Inbound Stock Record Modal (來貨記錄) */}
       {isRestockModalOpen && (
         <div 
-          className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 transition-all animate-fadeIn"
+          className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-2 sm:p-4 transition-all animate-fadeIn"
           onClick={() => {
             if (!isSubmittingRestock) setIsRestockModalOpen(false);
           }}
         >
           <div 
-            className="bg-white rounded-3xl max-w-3xl w-full max-h-[92vh] overflow-hidden shadow-2xl relative border border-slate-100 flex flex-col"
+            className="bg-white rounded-2xl sm:rounded-3xl max-w-3xl w-full max-h-[94vh] overflow-hidden shadow-2xl relative border border-slate-100 flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-emerald-100 flex items-center justify-center text-emerald-700 shrink-0 shadow-xs">
-                  <PackagePlus className="w-5 h-5" />
+            <div className="p-3.5 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70 shrink-0">
+              <div className="flex items-center gap-2.5 sm:gap-3">
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-emerald-100 flex items-center justify-center text-emerald-700 shrink-0 shadow-xs">
+                  <PackagePlus className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-slate-950 font-black text-sm md:text-base">
+                  <div className="flex items-center gap-1.5 sm:gap-2">
+                    <h3 className="text-slate-950 font-black text-xs sm:text-base">
                       來貨記錄（批次增加庫存）
                     </h3>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    <span className="text-[9px] sm:text-[10px] font-bold px-1.5 sm:px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
                       快速進貨入庫
                     </span>
                   </div>
-                  <p className="text-[11px] md:text-xs text-slate-500 mt-0.5">
+                  <p className="text-[10px] sm:text-xs text-slate-500 mt-0.5 line-clamp-1 sm:line-clamp-none">
                     搜尋並選取進貨商品，一次性輸入增加的庫存數量，提交後自動更新庫存並寫入 Purchase 分頁。
                   </p>
                 </div>
@@ -7242,7 +7242,7 @@ function revertStockForOrders(orderIdsMap) {
             </div>
 
             {/* Modal Body */}
-            <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
+            <div className="p-3 sm:p-6 overflow-y-auto flex-1 space-y-3.5 sm:space-y-4">
               {/* 1. Product Selection & Multi-select Section */}
               <div className="bg-slate-50/80 rounded-2xl p-3 sm:p-4 border border-slate-200 space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -7498,7 +7498,7 @@ function revertStockForOrders(orderIdsMap) {
                 )}
 
                 {restockItems.length === 0 ? (
-                  <div className="rounded-2xl border-2 border-dashed border-slate-200 p-8 sm:p-10 text-center bg-slate-50/50">
+                  <div className="rounded-2xl border-2 border-dashed border-slate-200 p-6 sm:p-10 text-center bg-slate-50/50">
                     <div className="w-12 h-12 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center mx-auto text-slate-400 mb-3">
                       <PackagePlus className="w-6 h-6" />
                     </div>
@@ -7506,111 +7506,117 @@ function revertStockForOrders(orderIdsMap) {
                       尚未選取任何進貨商品
                     </h4>
                     <p className="text-[11px] sm:text-xs text-slate-400 max-w-sm mx-auto">
-                      請在上方搜尋欄輸入商品名稱或編號，選取您本次來貨的商品，即可一次性批量填寫每項商品的入庫數量。
+                      請在上方搜尋或勾選商品，選取您本次來貨的商品，即可一次性批量填寫每項商品的入庫數量。
                     </p>
                   </div>
                 ) : (
-                  <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs bg-white">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-                          <th className="py-2.5 px-3 sm:px-4">商品名稱 (Product Name)</th>
-                          <th className="py-2.5 px-3 sm:px-4 w-52 sm:w-64 text-right">來貨數量 (Quantity)</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {restockItems.map((item) => {
-                          const currentStockNum = item.product.alwaysStock
-                            ? 0
-                            : parseFloat(item.product.secondaryStockCount) || 0;
-                          const addNum = parseInt(item.addQuantity.trim(), 10) || 0;
-                          const calculatedNewStock = currentStockNum + addNum;
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs bg-white divide-y divide-slate-100 w-full max-w-full">
+                    {/* Header bar */}
+                    <div className="bg-slate-50 px-3 sm:px-4 py-2 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider flex items-center justify-between">
+                      <span>商品名稱與目前庫存</span>
+                      <span className="hidden sm:inline">來貨數量</span>
+                    </div>
 
-                          return (
-                            <tr key={item.product.id} className="hover:bg-slate-50/60 transition-colors">
-                              {/* Column 1: Product Name */}
-                              <td className="py-3 px-3 sm:px-4 align-middle">
-                                <div className="flex items-center gap-3">
-                                  <div className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-slate-200 bg-slate-100 relative">
-                                    <ProductImage
-                                      id={item.product.id}
-                                      name={item.product.name}
-                                      fallbackUrl={item.product.extraAttributes?.["Image URLs"]}
-                                      isOutOfStock={!item.product.hasStock}
-                                      version={imageVersion}
-                                    />
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <p className="text-xs font-bold text-slate-900 leading-tight">
-                                      {item.product.name}
-                                    </p>
-                                    <div className="flex items-center gap-2 mt-1">
-                                      <span className="text-[10px] font-mono text-slate-400">
-                                        #{item.product.id}
-                                      </span>
-                                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold">
-                                        現有: {item.product.alwaysStock ? "長期充足" : (item.product.secondaryStockCount || "0")}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRemoveRestockItem(item.product.id)}
-                                    className="p-1.5 rounded-lg text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer shrink-0 ml-1"
-                                    title="移除此項"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
+                    <div className="divide-y divide-slate-100">
+                      {restockItems.map((item) => {
+                        const currentStockNum = item.product.alwaysStock
+                          ? 0
+                          : parseFloat(item.product.secondaryStockCount) || 0;
+                        const addNum = parseInt(item.addQuantity.trim(), 10) || 0;
+                        const calculatedNewStock = currentStockNum + addNum;
+
+                        return (
+                          <div
+                            key={item.product.id}
+                            className="p-3 sm:p-4 hover:bg-slate-50/60 transition-colors flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-4"
+                          >
+                            {/* Product Info Row */}
+                            <div className="flex items-start justify-between gap-2 sm:gap-3 min-w-0 flex-1">
+                              <div className="flex items-start gap-2.5 sm:gap-3 min-w-0 flex-1">
+                                <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-lg overflow-hidden shrink-0 border border-slate-200 bg-slate-100 relative mt-0.5">
+                                  <ProductImage
+                                    id={item.product.id}
+                                    name={item.product.name}
+                                    fallbackUrl={item.product.extraAttributes?.["Image URLs"]}
+                                    isOutOfStock={!item.product.hasStock}
+                                    version={imageVersion}
+                                  />
                                 </div>
-                              </td>
-
-                              {/* Column 2: Quantity */}
-                              <td className="py-3 px-3 sm:px-4 align-middle text-right">
-                                <div className="flex flex-col items-end gap-1.5">
-                                  <div className="relative w-36 sm:w-44">
-                                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-emerald-600">
-                                      +
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs sm:text-sm font-bold text-slate-900 leading-snug break-words">
+                                    {item.product.name}
+                                  </p>
+                                  <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[11px] text-slate-500">
+                                    <span className="font-mono text-slate-400 text-[10px]">
+                                      #{item.product.id}
                                     </span>
-                                    <input
-                                      type="number"
-                                      min="1"
-                                      step="1"
-                                      placeholder="增加件數"
-                                      value={item.addQuantity}
-                                      onChange={(e) => handleUpdateRestockQuantity(item.product.id, e.target.value)}
-                                      className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 text-right pr-3 pl-6 py-1.5 text-xs sm:text-sm font-bold text-slate-900 rounded-xl outline-none transition-all"
-                                    />
+                                    <span>•</span>
+                                    <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold text-[10px]">
+                                      現有: {item.product.alwaysStock ? "長期充足" : (item.product.secondaryStockCount || "0")}
+                                    </span>
+                                    {addNum > 0 && (
+                                      <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
+                                        入庫後: {calculatedNewStock} 件 (+{addNum})
+                                      </span>
+                                    )}
                                   </div>
-
-                                  {/* Quick addition chips */}
-                                  <div className="flex items-center gap-1 justify-end">
-                                    {[5, 10, 50, 100].map((delta) => (
-                                      <button
-                                        key={delta}
-                                        type="button"
-                                        onClick={() => handleQuickAddQuantity(item.product.id, delta)}
-                                        className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 text-slate-600 transition-colors cursor-pointer"
-                                        title={`增加 ${delta} 件`}
-                                      >
-                                        +{delta}
-                                      </button>
-                                    ))}
-                                  </div>
-
-                                  {/* Live Preview Indicator */}
-                                  {addNum > 0 && (
-                                    <div className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100 flex items-center gap-1">
-                                      <span>入庫後: {calculatedNewStock} 件</span>
-                                      <span className="text-emerald-500 font-normal">(+{addNum})</span>
-                                    </div>
-                                  )}
                                 </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                              </div>
+
+                              {/* Remove button */}
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveRestockItem(item.product.id)}
+                                className="p-1 rounded-lg text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
+                                title="移除此項"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+
+                            {/* Quantity Controls Row (Stacked on mobile, side-by-side on sm screens) */}
+                            <div className="flex items-center justify-between sm:justify-end gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 shrink-0 w-full sm:w-auto">
+                              <span className="text-[11px] font-bold text-slate-700 sm:hidden">
+                                來貨數量:
+                              </span>
+
+                              <div className="flex items-center gap-1.5 ml-auto sm:ml-0">
+                                {/* Input box */}
+                                <div className="relative w-28 sm:w-32">
+                                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-emerald-600">
+                                    +
+                                  </span>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    placeholder="增加件數"
+                                    value={item.addQuantity}
+                                    onChange={(e) => handleUpdateRestockQuantity(item.product.id, e.target.value)}
+                                    className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 text-right pr-2.5 pl-6 py-1.5 text-xs sm:text-sm font-bold text-slate-900 rounded-xl outline-none transition-all"
+                                  />
+                                </div>
+
+                                {/* Quick chips */}
+                                <div className="flex items-center gap-1">
+                                  {[5, 10, 50, 100].map((delta) => (
+                                    <button
+                                      key={delta}
+                                      type="button"
+                                      onClick={() => handleQuickAddQuantity(item.product.id, delta)}
+                                      className="text-[10px] font-bold px-1.5 py-1 rounded-lg bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 text-slate-600 transition-colors cursor-pointer"
+                                      title={`增加 ${delta} 件`}
+                                    >
+                                      +{delta}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
