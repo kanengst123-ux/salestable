@@ -50,7 +50,8 @@ import {
   PackagePlus,
   TrendingUp,
   History,
-  ArrowRight
+  ArrowRight,
+  CheckSquare
 } from "lucide-react";
 import { initDriveAuth, googleDriveSignIn, driveLogout, getDriveAccessToken } from "./lib/driveAuth";
 import { uploadImageToDrive } from "./lib/driveSync";
@@ -1040,14 +1041,14 @@ export default function App() {
       const ctx = canvas.getContext("2d");
       if (!ctx) return { dataUrl: "", widthMm: 0, heightMm: 0 };
 
-      const fontSize = 38;
-      const lineHeight = 44;
+      const fontSize = 56;
+      const lineHeight = 64;
       ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", sans-serif`;
 
       const chars = text.split("");
       let line1 = "";
       let line2 = "";
-      const targetPixelWidth = 350; // High resolution pixel width for 44.5mm box
+      const targetPixelWidth = 420; // High resolution pixel width for 45.5mm box
 
       for (let i = 0; i < chars.length; i++) {
         const testLine = line1 + chars[i];
@@ -1086,7 +1087,7 @@ export default function App() {
         ctx.fillText(line2, 0, lineHeight + 2);
       }
 
-      const heightMm = numLines * 4.6;
+      const heightMm = numLines * 5.5;
       return { dataUrl: canvas.toDataURL("image/png"), widthMm: maxWidthMm, heightMm };
     } catch (e) {
       return { dataUrl: "", widthMm: 0, heightMm: 0 };
@@ -1670,7 +1671,7 @@ export default function App() {
               // 2. Image inside Card
               const pad = 1.0;
               const imgBoxW = cardW - (pad * 2); // 45.5 mm
-              const imgBoxH = 36.5; // 36.5 mm (clean aspect ratio leaving comfortable space below for name and price tag)
+              const imgBoxH = 31.0; // 31.0 mm (high quality aspect ratio giving maximum space for large product name text)
               const imgX_base = cx + pad;
               const imgY_base = cy + pad;
 
@@ -1747,37 +1748,56 @@ export default function App() {
                 doc.line(imgX_base, imgY_base, imgX_base + imgBoxW, imgY_base + imgBoxH);
               }
 
-              // 3. Product Name under Image
-              const textX = cx + 1.5;
-              const nameStartY = imgY_base + imgBoxH + 3.2;
-              const productNameStr = p.costName || p.name || "";
+              // 3. Product Name under Image (Maximized font size for 16 tiles per page)
+              const textX = cx + 1.2;
+              const maxTextWidth = cardW - 2.4; // 45.1 mm width
+              const productNameStr = (p.costName || p.name || "").trim();
 
               if (fontAdded) {
-                doc.setFontSize(9.6);
+                // Find maximum possible font size that fits the product name
+                // Start with 15.5pt for maximum readability across 16 tiles per page
+                let optimalFontSize = 15.5;
                 doc.setFont("NotoSansTC", "bold");
+                doc.setFontSize(optimalFontSize);
+                let wrappedLines = doc.splitTextToSize(productNameStr, maxTextWidth);
+
+                while (wrappedLines.length > 2 && optimalFontSize > 10.5) {
+                  optimalFontSize -= 0.5;
+                  doc.setFontSize(optimalFontSize);
+                  wrappedLines = doc.splitTextToSize(productNameStr, maxTextWidth);
+                }
+
+                doc.setFontSize(optimalFontSize);
                 if (isOutOfStock) {
                   doc.setTextColor(156, 163, 175);
                 } else {
                   doc.setTextColor(15, 23, 42);
                 }
-                const wrappedName = doc.splitTextToSize(productNameStr, cardW - 2.8);
-                const line1 = wrappedName[0] || "";
-                let line2 = wrappedName[1] || "";
-                if (wrappedName.length > 2) {
-                  line2 = line2.substring(0, Math.max(0, line2.length - 2)) + "...";
-                }
-                doc.text(line1, textX, nameStartY);
-                if (line2) {
-                  doc.text(line2, textX, nameStartY + 4.1);
+
+                const lineSpacing = optimalFontSize * 0.38;
+                const nameStartY = imgY_base + imgBoxH + (wrappedLines.length === 1 ? 5.2 : 3.8);
+
+                if (wrappedLines.length === 1) {
+                  doc.text(wrappedLines[0], textX, nameStartY);
+                } else {
+                  doc.text(wrappedLines[0], textX, nameStartY);
+                  let line2 = wrappedLines[1] || "";
+                  if (wrappedLines.length > 2) {
+                    while (doc.getTextWidth(line2 + "...") > maxTextWidth && line2.length > 1) {
+                      line2 = line2.slice(0, -1);
+                    }
+                    line2 = line2 + "...";
+                  }
+                  doc.text(line2, textX, nameStartY + lineSpacing);
                 }
               } else {
                 const textImg = createCanvasTextDataUrl(
                   productNameStr,
-                  cardW - 2.8,
+                  cardW - 2.4,
                   isOutOfStock ? "#9ca3af" : "#0f172a"
                 );
                 if (textImg.dataUrl) {
-                  doc.addImage(textImg.dataUrl, "PNG", textX, nameStartY - 1.2, textImg.widthMm, textImg.heightMm);
+                  doc.addImage(textImg.dataUrl, "PNG", textX, imgY_base + imgBoxH + 1.8, textImg.widthMm, textImg.heightMm);
                 }
               }
 
@@ -1793,9 +1813,9 @@ export default function App() {
               }
               const pWidth = doc.getTextWidth(priceStr);
               const badgeW = Math.max(20, pWidth + 3.4);
-              const badgeH = 5.2;
+              const badgeH = 5.0;
               const badgeX = textX;
-              const badgeY = cy + cardH - badgeH - 1.8;
+              const badgeY = cy + cardH - badgeH - 1.5;
 
               // Clean price tag badge with subtle border
               if (isOutOfStock) {
@@ -1813,7 +1833,7 @@ export default function App() {
               } else {
                 doc.setTextColor(15, 23, 42);
               }
-              doc.text(priceStr, badgeX + 1.7, badgeY + 3.7);
+              doc.text(priceStr, badgeX + 1.7, badgeY + 3.5);
               if (fontAdded) {
                 doc.setFont("NotoSansTC", "normal");
               }
@@ -1956,16 +1976,43 @@ export default function App() {
   // Restock (來貨記錄) Modal State & Handlers
   const [isRestockModalOpen, setIsRestockModalOpen] = useState<boolean>(false);
   const [restockSearch, setRestockSearch] = useState<string>("");
+  const [restockCategoryFilter, setRestockCategoryFilter] = useState<string>("ALL");
+  const [tableSelectedProductIds, setTableSelectedProductIds] = useState<string[]>([]);
   const [restockItems, setRestockItems] = useState<RestockItem[]>([]);
   const [isSubmittingRestock, setIsSubmittingRestock] = useState<boolean>(false);
 
+  // Available categories for restock filtering
+  const restockCategories = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of products) {
+      const cat = p.costCategoryName || p.extraAttributes?.["Categories"];
+      if (cat && cat.trim()) set.add(cat.trim());
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "zh-HK"));
+  }, [products]);
+
   const restockSearchResults = useMemo(() => {
-    if (!restockSearch.trim()) return [];
+    let pool = products;
+    if (restockCategoryFilter === "OUT_OF_STOCK") {
+      pool = pool.filter(p => !p.hasStock);
+    } else if (restockCategoryFilter !== "ALL") {
+      pool = pool.filter(p => (p.costCategoryName || p.extraAttributes?.["Categories"] || "") === restockCategoryFilter);
+    }
+
+    if (!restockSearch.trim()) {
+      // Prioritize out-of-stock and low stock items first when browsing
+      return [...pool].sort((a, b) => {
+        if (!a.hasStock && b.hasStock) return -1;
+        if (a.hasStock && !b.hasStock) return 1;
+        return (a.name || "").localeCompare(b.name || "", "zh-HK");
+      }).slice(0, 150);
+    }
+
     const rawQ = restockSearch.trim().toLowerCase();
     const queryWords = rawQ.split(/\s+/).filter(Boolean);
 
     const scored: { p: Product; score: number }[] = [];
-    for (const p of products) {
+    for (const p of pool) {
       const name = (p.name || "").toLowerCase();
       const id = (p.id || "").toLowerCase();
       const rawId = id.replace(/^id-/, "");
@@ -2006,9 +2053,65 @@ export default function App() {
     }
 
     scored.sort((a, b) => b.score - a.score || a.p.name.localeCompare(b.p.name, "zh-HK"));
-    // Show up to 200 matching products to prevent UI freezing on 1-letter generic queries while showing all real matches
     return scored.slice(0, 200).map(x => x.p);
-  }, [products, restockSearch]);
+  }, [products, restockSearch, restockCategoryFilter]);
+
+  const [selectedRestockCandidateIds, setSelectedRestockCandidateIds] = useState<string[]>([]);
+
+  const handleToggleSelectRestockCandidate = (productId: string) => {
+    setSelectedRestockCandidateIds(prev => 
+      prev.includes(productId) ? prev.filter(id => id !== productId) : [...prev, productId]
+    );
+  };
+
+  const handleSelectAllRestockCandidates = () => {
+    const unaddedResults = restockSearchResults.filter(
+      p => !restockItems.some(it => it.product.id === p.id)
+    );
+    if (unaddedResults.length === 0) return;
+
+    const allUnaddedSelected = unaddedResults.every(p => selectedRestockCandidateIds.includes(p.id));
+    if (allUnaddedSelected) {
+      const unaddedIdSet = new Set(unaddedResults.map(p => p.id));
+      setSelectedRestockCandidateIds(prev => prev.filter(id => !unaddedIdSet.has(id)));
+    } else {
+      const merged = new Set([...selectedRestockCandidateIds, ...unaddedResults.map(p => p.id)]);
+      setSelectedRestockCandidateIds(Array.from(merged));
+    }
+  };
+
+  const handleAddBatchProductsToRestock = () => {
+    if (selectedRestockCandidateIds.length === 0) return;
+    const productsToAdd = products.filter(p => selectedRestockCandidateIds.includes(p.id));
+    
+    setRestockItems(prev => {
+      const existingIds = new Set(prev.map(it => it.product.id));
+      const newItems = productsToAdd
+        .filter(p => !existingIds.has(p.id))
+        .map(product => ({ product, addQuantity: "" }));
+      return [...prev, ...newItems];
+    });
+
+    showToast(`已成功加入 ${selectedRestockCandidateIds.length} 項商品到來貨表！`);
+    setSelectedRestockCandidateIds([]);
+  };
+
+  const handleOpenRestockWithTableSelection = () => {
+    if (tableSelectedProductIds.length === 0) return;
+    const productsToAdd = products.filter(p => tableSelectedProductIds.includes(p.id));
+    
+    setRestockItems(prev => {
+      const existingIds = new Set(prev.map(it => it.product.id));
+      const newItems = productsToAdd
+        .filter(p => !existingIds.has(p.id))
+        .map(product => ({ product, addQuantity: "" }));
+      return [...prev, ...newItems];
+    });
+
+    setIsRestockModalOpen(true);
+    showToast(`已成功加入 ${tableSelectedProductIds.length} 項商品到來貨表！`);
+    setTableSelectedProductIds([]);
+  };
 
   const handleAddProductToRestock = (product: Product) => {
     setRestockItems(prev => {
@@ -2016,7 +2119,16 @@ export default function App() {
       if (existing) return prev;
       return [...prev, { product, addQuantity: "" }];
     });
-    setRestockSearch("");
+    setSelectedRestockCandidateIds(prev => prev.filter(id => id !== product.id));
+    showToast(`已加入「${product.name}」到來貨表`);
+  };
+
+  const handleBatchSetAllRestockQuantity = (qty: number) => {
+    setRestockItems(prev => prev.map(item => ({
+      ...item,
+      addQuantity: qty.toString()
+    })));
+    showToast(`已將全部來貨商品數量設為 +${qty}`);
   };
 
   const handleUpdateRestockQuantity = (productId: string, qtyStr: string) => {
@@ -3532,6 +3644,15 @@ export default function App() {
                   </div>
                   
                   <div className="flex items-center gap-2 shrink-0">
+                    {tableSelectedProductIds.length > 0 && (
+                      <button
+                        onClick={handleOpenRestockWithTableSelection}
+                        className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all animate-fadeIn"
+                      >
+                        <PackagePlus className="w-3.5 h-3.5" />
+                        <span>批次進貨入庫 ({tableSelectedProductIds.length})</span>
+                      </button>
+                    )}
                     <span className="text-xs font-bold text-slate-600 bg-slate-100 border border-slate-200/80 px-2.5 py-1 rounded-lg">
                       共 {processedProducts.length} 款商品
                     </span>
@@ -3556,6 +3677,25 @@ export default function App() {
                   <table className="w-full text-left text-xs text-slate-650 min-w-[500px]">
                     <thead className="bg-slate-50/85 text-[10px] text-slate-400 uppercase font-extrabold tracking-wider border-b border-slate-100">
                       <tr>
+                        <th className="w-10 px-3 py-3 text-center">
+                          <input 
+                            type="checkbox" 
+                            checked={processedProducts.slice(0, 50).length > 0 && processedProducts.slice(0, 50).every(p => tableSelectedProductIds.includes(p.id))} 
+                            onChange={() => {
+                              const pageItems = processedProducts.slice(0, 50);
+                              const isAllSelected = pageItems.every(p => tableSelectedProductIds.includes(p.id));
+                              if (isAllSelected) {
+                                const idSet = new Set(pageItems.map(p => p.id));
+                                setTableSelectedProductIds(prev => prev.filter(id => !idSet.has(id)));
+                              } else {
+                                const merged = new Set([...tableSelectedProductIds, ...pageItems.map(p => p.id)]);
+                                setTableSelectedProductIds(Array.from(merged));
+                              }
+                            }} 
+                            title="全選本頁商品"
+                            className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 accent-emerald-600 cursor-pointer" 
+                          />
+                        </th>
                         <th className="px-4 py-3 text-center">操作</th>
                         <th className="px-4 py-3">商品名稱</th>
                         <th className="px-4 py-3 text-right">單價</th>
@@ -3568,13 +3708,25 @@ export default function App() {
                     <tbody className="divide-y divide-slate-100">
                       {processedProducts.length === 0 ? (
                         <tr>
-                          <td colSpan={stockFilter === "dead-stock" ? 5 : 4} className="px-4 py-10 text-center text-slate-400 italic">
+                          <td colSpan={stockFilter === "dead-stock" ? 6 : 5} className="px-4 py-10 text-center text-slate-400 italic">
                             沒有與您的搜尋條件匹配的商品記錄。
                           </td>
                         </tr>
                       ) : (
                         processedProducts.slice(0, 50).map((prod) => (
                           <tr key={prod.id} className="hover:bg-slate-50/50 transition-all">
+                            <td className="px-3 py-2 text-center">
+                              <input 
+                                type="checkbox" 
+                                checked={tableSelectedProductIds.includes(prod.id)} 
+                                onChange={() => {
+                                  setTableSelectedProductIds(prev =>
+                                    prev.includes(prod.id) ? prev.filter(id => id !== prod.id) : [...prev, prod.id]
+                                  );
+                                }} 
+                                className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 accent-emerald-600 cursor-pointer" 
+                              />
+                            </td>
                             <td className="px-4 py-2 text-center">
                               <button
                                 onClick={() => {
@@ -3639,6 +3791,33 @@ export default function App() {
                   <p className="text-[10px] text-slate-400 text-center italic mt-2">
                     後台列表最多顯示前 50 條商品。使用搜尋功能可定位到具體 SKU 商品，或點擊「向客戶展示產品目錄」模式瀏覽。
                   </p>
+                )}
+
+                {/* Floating Batch Action Bar when table items selected */}
+                {tableSelectedProductIds.length > 0 && (
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-emerald-700 text-white shadow-lg animate-fadeIn">
+                    <div className="text-xs font-bold flex items-center gap-2">
+                      <CheckSquare className="w-4 h-4 text-emerald-200" />
+                      <span>已在表格勾選 <strong>{tableSelectedProductIds.length}</strong> 款商品</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setTableSelectedProductIds([])}
+                        className="px-2.5 py-1 rounded-lg text-emerald-100 hover:text-white text-xs underline cursor-pointer"
+                      >
+                        清空勾選
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleOpenRestockWithTableSelection}
+                        className="px-4 py-1.5 rounded-lg bg-white text-emerald-800 hover:bg-emerald-50 font-black text-xs shadow-xs transition-all cursor-pointer flex items-center gap-1.5"
+                      >
+                        <PackagePlus className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>批次進貨入庫 / 調整庫存 ➔</span>
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
 
@@ -7064,136 +7243,259 @@ function revertStockForOrders(orderIdsMap) {
 
             {/* Modal Body */}
             <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
-              {/* Product Search Bar */}
-              <div className="relative">
-                <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
-                  <span>1. 搜尋並選取商品加入來貨表</span>
-                  <span className="text-[11px] font-normal text-slate-400">點選商品即可加入下方清單</span>
-                </label>
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    placeholder="輸入商品名稱、編號 SKU 或分類搜尋..."
-                    value={restockSearch}
-                    onChange={(e) => setRestockSearch(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 text-slate-900 text-xs sm:text-sm rounded-xl pl-9 pr-9 py-2.5 outline-none transition-all font-medium"
-                    autoFocus
-                  />
-                  {restockSearch && (
+              {/* 1. Product Selection & Multi-select Section */}
+              <div className="bg-slate-50/80 rounded-2xl p-3 sm:p-4 border border-slate-200 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-5 h-5 rounded-full bg-emerald-600 text-white text-[11px] font-extrabold flex items-center justify-center shrink-0">
+                      1
+                    </span>
+                    <label className="text-xs font-extrabold text-slate-800">
+                      搜尋或篩選商品，勾選多項商品一次性加入
+                    </label>
+                  </div>
+                  
+                  {/* Batch Add Button (Header) */}
+                  {selectedRestockCandidateIds.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => setRestockSearch("")}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      onClick={handleAddBatchProductsToRestock}
+                      className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-md shadow-emerald-200 flex items-center gap-1.5 transition-all cursor-pointer self-start sm:self-auto"
                     >
-                      <X className="w-4 h-4" />
+                      <CheckSquare className="w-3.5 h-3.5" />
+                      <span>加入所選商品 ({selectedRestockCandidateIds.length} 項)</span>
                     </button>
                   )}
                 </div>
 
-                {/* Search Results Dropdown List */}
-                {restockSearch.trim() !== "" && (
-                  <div className="absolute z-20 left-0 right-0 mt-1 bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden max-h-80 sm:max-h-96 overflow-y-auto animate-fadeIn">
-                    {restockSearchResults.length > 0 ? (
-                      <div>
-                        <div className="sticky top-0 z-10 bg-slate-100/95 backdrop-blur-xs px-3.5 py-2 border-b border-slate-200/80 flex items-center justify-between text-[11px] text-slate-500 font-medium">
-                          <span>
-                            共找到 <strong className="text-emerald-700 font-bold">{restockSearchResults.length}</strong> 項符合商品
-                          </span>
-                          <span className="text-[10px] text-slate-400">
-                            已依相關度排序，請滑動選取
-                          </span>
-                        </div>
-                        <div className="divide-y divide-slate-100">
-                          {restockSearchResults.map((prod) => {
-                          const isAlreadyIn = restockItems.some((it) => it.product.id === prod.id);
-                          return (
-                            <div
-                              key={prod.id}
-                              onClick={() => !isAlreadyIn && handleAddProductToRestock(prod)}
-                              className={`p-2.5 sm:p-3 flex items-center justify-between gap-3 transition-colors ${
-                                isAlreadyIn
-                                  ? "bg-slate-50/70 cursor-default opacity-60"
-                                  : "hover:bg-emerald-50/50 cursor-pointer"
-                              }`}
-                            >
-                              <div className="flex items-center gap-3 min-w-0">
-                                <div className="w-9 h-9 rounded-lg overflow-hidden shrink-0 border border-slate-200 bg-slate-100 relative">
-                                  <ProductImage
-                                    id={prod.id}
-                                    name={prod.name}
-                                    fallbackUrl={prod.extraAttributes?.["Image URLs"]}
-                                    isOutOfStock={!prod.hasStock}
-                                    version={imageVersion}
-                                  />
-                                </div>
-                                <div className="min-w-0">
-                                  <p className="text-xs font-bold text-slate-900 truncate">
-                                    {prod.name}
-                                  </p>
-                                  <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
-                                    <span className="font-mono text-slate-400">#{prod.id}</span>
-                                    <span>•</span>
-                                    <span className={prod.hasStock ? "text-emerald-600 font-semibold" : "text-rose-500 font-semibold"}>
-                                      現有: {prod.alwaysStock ? "長期充足" : (prod.secondaryStockCount || "0")}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
+                {/* Search input + Quick Filters */}
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="輸入商品名稱、編號 SKU 或分類搜尋..."
+                      value={restockSearch}
+                      onChange={(e) => setRestockSearch(e.target.value)}
+                      className="w-full bg-white border border-slate-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 text-slate-900 text-xs sm:text-sm rounded-xl pl-9 pr-9 py-2 outline-none transition-all font-medium"
+                    />
+                    {restockSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setRestockSearch("")}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
 
-                              <div className="shrink-0">
-                                {isAlreadyIn ? (
-                                  <span className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-200 text-slate-600 font-bold">
-                                    已加入
-                                  </span>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleAddProductToRestock(prod);
-                                    }}
-                                    className="text-xs px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all shadow-xs flex items-center gap-1 cursor-pointer"
-                                  >
-                                    <Plus className="w-3 h-3" />
-                                    <span>加入</span>
-                                  </button>
-                                )}
+                  {/* Category Filter Dropdown */}
+                  <select
+                    value={restockCategoryFilter}
+                    onChange={(e) => setRestockCategoryFilter(e.target.value)}
+                    className="bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-xl px-3 py-2 outline-none cursor-pointer hover:border-slate-300"
+                  >
+                    <option value="ALL">全部分類 ({products.length})</option>
+                    <option value="OUT_OF_STOCK">⚠️ 僅顯示缺貨商品 ({products.filter(p => !p.hasStock).length})</option>
+                    {restockCategories.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Selection Bar & Select All Action */}
+                <div className="flex items-center justify-between px-2 pt-1 border-t border-slate-200/60 text-xs">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSelectAllRestockCandidates}
+                      className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 font-bold text-[11px] flex items-center gap-1.5 cursor-pointer shadow-2xs transition-all"
+                    >
+                      <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>
+                        {restockSearchResults.filter(p => !restockItems.some(it => it.product.id === p.id)).every(p => selectedRestockCandidateIds.includes(p.id)) && selectedRestockCandidateIds.length > 0
+                          ? "取消全選"
+                          : "全選目前顯示商品"}
+                      </span>
+                    </button>
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      顯示 <strong>{restockSearchResults.length}</strong> 項
+                      {selectedRestockCandidateIds.length > 0 && (
+                        <span className="ml-1 text-emerald-700 font-bold bg-emerald-100/70 px-1.5 py-0.5 rounded-md">
+                          已勾選 {selectedRestockCandidateIds.length} 項
+                        </span>
+                      )}
+                    </span>
+                  </div>
+
+                  {selectedRestockCandidateIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRestockCandidateIds([])}
+                      className="text-[10px] text-slate-400 hover:text-slate-600 underline cursor-pointer"
+                    >
+                      清空勾選
+                    </button>
+                  )}
+                </div>
+
+                {/* Candidate Products Scrollable List */}
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden max-h-56 sm:max-h-64 overflow-y-auto divide-y divide-slate-100 shadow-inner">
+                  {restockSearchResults.length === 0 ? (
+                    <div className="p-4 text-center text-xs text-slate-400">
+                      沒有符合「{restockSearch}」的商品
+                    </div>
+                  ) : (
+                    restockSearchResults.map((prod) => {
+                      const isAlreadyIn = restockItems.some((it) => it.product.id === prod.id);
+                      const isSelected = selectedRestockCandidateIds.includes(prod.id);
+
+                      return (
+                        <div
+                          key={prod.id}
+                          onClick={() => {
+                            if (!isAlreadyIn) {
+                              handleToggleSelectRestockCandidate(prod.id);
+                            }
+                          }}
+                          className={`p-2.5 flex items-center justify-between gap-3 transition-colors ${
+                            isAlreadyIn
+                              ? "bg-slate-50/70 opacity-60 cursor-default"
+                              : isSelected
+                              ? "bg-emerald-50/80 hover:bg-emerald-50 cursor-pointer"
+                              : "hover:bg-slate-50 cursor-pointer"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            {/* Checkbox */}
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              disabled={isAlreadyIn}
+                              onChange={() => {
+                                if (!isAlreadyIn) {
+                                  handleToggleSelectRestockCandidate(prod.id);
+                                }
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 accent-emerald-600 cursor-pointer shrink-0 disabled:opacity-40"
+                            />
+
+                            <div className="w-9 h-9 rounded-lg overflow-hidden shrink-0 border border-slate-200 bg-slate-100 relative">
+                              <ProductImage
+                                id={prod.id}
+                                name={prod.name}
+                                fallbackUrl={prod.extraAttributes?.["Image URLs"]}
+                                isOutOfStock={!prod.hasStock}
+                                version={imageVersion}
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <p className={`text-xs font-bold truncate ${isSelected ? "text-emerald-950 font-black" : "text-slate-900"}`}>
+                                {prod.name}
+                              </p>
+                              <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
+                                <span className="font-mono text-slate-400">#{prod.id}</span>
+                                <span>•</span>
+                                <span className={prod.hasStock ? "text-emerald-600 font-semibold" : "text-rose-500 font-semibold"}>
+                                  現有: {prod.alwaysStock ? "長期充足" : (prod.secondaryStockCount || "0")}
+                                </span>
                               </div>
                             </div>
-                          );
-                        })}
+                          </div>
+
+                          <div className="shrink-0 flex items-center gap-1.5">
+                            {isAlreadyIn ? (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-200 text-slate-600 font-bold">
+                                已在來貨表
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleAddProductToRestock(prod);
+                                }}
+                                className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-emerald-600 hover:text-white text-slate-700 font-bold transition-all flex items-center gap-1 cursor-pointer border border-slate-200"
+                                title="單項加入"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>加入</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ) : (
-                      <div className="p-4 text-center text-xs text-slate-400">
-                        找不到符合「{restockSearch}」的商品
-                      </div>
-                    )}
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Floating Batch Add Bar when items selected */}
+                {selectedRestockCandidateIds.length > 0 && (
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-emerald-600 text-white shadow-lg animate-fadeIn">
+                    <div className="text-xs font-bold flex items-center gap-2">
+                      <CheckSquare className="w-4 h-4 text-emerald-200" />
+                      <span>已選取 <strong>{selectedRestockCandidateIds.length}</strong> 項商品</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAddBatchProductsToRestock}
+                      className="px-4 py-1.5 rounded-lg bg-white text-emerald-800 hover:bg-emerald-50 font-black text-xs shadow-xs transition-all cursor-pointer"
+                    >
+                      批量加入清單 ➔
+                    </button>
                   </div>
                 )}
               </div>
 
               {/* 2-Column Table Section */}
               <div>
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
                   <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                    <span>2. 來貨商品清單與數量</span>
+                    <span className="w-5 h-5 rounded-full bg-slate-800 text-white text-[11px] font-extrabold flex items-center justify-center shrink-0">
+                      2
+                    </span>
+                    <span>來貨商品清單與數量</span>
                     <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-bold">
                       {restockItems.length} 項
                     </span>
                   </label>
-                  {restockItems.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={handleClearRestockItems}
-                      className="text-[11px] text-rose-500 hover:text-rose-700 font-semibold cursor-pointer flex items-center gap-1"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                      <span>清空列表</span>
-                    </button>
-                  )}
+
+                  <div className="flex items-center gap-2 self-end sm:self-auto">
+                    {restockItems.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleClearRestockItems}
+                        className="text-[11px] text-rose-500 hover:text-rose-700 font-semibold cursor-pointer flex items-center gap-1"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>清空列表</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
+
+                {/* Batch Set Quantity Toolbar */}
+                {restockItems.length > 0 && (
+                  <div className="mb-2.5 bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="text-[11px] font-bold text-slate-600 flex items-center gap-1">
+                      <span>⚡ 批次設定數量：</span>
+                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {[5, 10, 20, 50, 100].map((qty) => (
+                        <button
+                          key={qty}
+                          type="button"
+                          onClick={() => handleBatchSetAllRestockQuantity(qty)}
+                          className="px-2 py-0.5 rounded-md bg-white border border-slate-200 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-700 text-slate-700 text-[11px] font-bold transition-all cursor-pointer shadow-2xs"
+                        >
+                          全部 +{qty}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {restockItems.length === 0 ? (
                   <div className="rounded-2xl border-2 border-dashed border-slate-200 p-8 sm:p-10 text-center bg-slate-50/50">
