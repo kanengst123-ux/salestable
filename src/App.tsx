@@ -1042,38 +1042,39 @@ export default function App() {
       const ctx = canvas.getContext("2d");
       if (!ctx) return { dataUrl: "", widthMm: 0, heightMm: 0 };
 
-      const fontSize = 56;
-      const lineHeight = 64;
+      const targetPixelWidth = 420; // High resolution pixel width for 45.5mm box
+      let fontSize = 46;
+      let lineHeight = 54;
       ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", sans-serif`;
 
-      const chars = text.split("");
-      let line1 = "";
-      let line2 = "";
-      const targetPixelWidth = 420; // High resolution pixel width for 45.5mm box
-
-      for (let i = 0; i < chars.length; i++) {
-        const testLine = line1 + chars[i];
-        if (ctx.measureText(testLine).width > targetPixelWidth && i > 0) {
-          line2 = chars.slice(i).join("");
-          break;
-        } else {
-          line1 = testLine;
-        }
-      }
-
-      if (line2) {
-        let testLine2 = "";
-        for (let i = 0; i < line2.length; i++) {
-          if (ctx.measureText(testLine2 + line2[i]).width > targetPixelWidth - 30) {
-            testLine2 += "...";
-            break;
+      // Helper to wrap text into lines based on measureText
+      const wrapText = (fSize: number) => {
+        ctx.font = `bold ${fSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", sans-serif`;
+        const lines: string[] = [];
+        let currentLine = "";
+        for (let i = 0; i < text.length; i++) {
+          const char = text[i];
+          const testLine = currentLine + char;
+          if (ctx.measureText(testLine).width > targetPixelWidth && currentLine.length > 0) {
+            lines.push(currentLine);
+            currentLine = char;
+          } else {
+            currentLine = testLine;
           }
-          testLine2 += line2[i];
         }
-        line2 = testLine2;
+        if (currentLine) lines.push(currentLine);
+        return lines;
+      };
+
+      let lines = wrapText(fontSize);
+      // Reduce font size until text comfortably fits without truncation
+      while (lines.length > 2 && fontSize > 26) {
+        fontSize -= 3;
+        lineHeight = Math.round(fontSize * 1.16);
+        lines = wrapText(fontSize);
       }
 
-      const numLines = line2 ? 2 : 1;
+      const numLines = lines.length;
       const canvasWidth = Math.ceil(targetPixelWidth);
       const canvasHeight = Math.ceil(numLines * lineHeight + 4);
 
@@ -1083,13 +1084,12 @@ export default function App() {
       ctx.fillStyle = textColor;
       ctx.font = `bold ${fontSize}px "Noto Sans TC", "Microsoft JhengHei", "PingFang HK", sans-serif`;
       ctx.textBaseline = "top";
-      ctx.fillText(line1, 0, 2);
-      if (line2) {
-        ctx.fillText(line2, 0, lineHeight + 2);
-      }
+      lines.forEach((l, idx) => {
+        ctx.fillText(l, 0, idx * lineHeight + 2);
+      });
 
-      const heightMm = numLines * 5.5;
-      return { dataUrl: canvas.toDataURL("image/png"), widthMm: maxWidthMm, heightMm };
+      const heightMm = numLines * (fontSize * 0.1);
+      return { dataUrl: canvas.toDataURL("image/png"), widthMm: maxWidthMm, heightMm: Math.min(heightMm, 15) };
     } catch (e) {
       return { dataUrl: "", widthMm: 0, heightMm: 0 };
     }
@@ -1749,66 +1749,18 @@ export default function App() {
                 doc.line(imgX_base, imgY_base, imgX_base + imgBoxW, imgY_base + imgBoxH);
               }
 
-              // 3. Product Name under Image (Maximized font size for 16 tiles per page)
+              // 3. Product Name under Image (Full Name without truncation)
+              // User requirement: "in the pdf, some product names won't fully show, because it is too long. Reduce the text size to show full name"
               const textX = cx + 1.2;
               const maxTextWidth = cardW - 2.4; // 45.1 mm width
               const productNameStr = (p.costName || p.name || "").trim();
 
-              if (fontAdded) {
-                // Find maximum possible font size that fits the product name
-                // Start with 15.5pt for maximum readability across 16 tiles per page
-                let optimalFontSize = 15.5;
-                doc.setFont("NotoSansTC", "bold");
-                doc.setFontSize(optimalFontSize);
-                let wrappedLines = doc.splitTextToSize(productNameStr, maxTextWidth);
-
-                while (wrappedLines.length > 2 && optimalFontSize > 10.5) {
-                  optimalFontSize -= 0.5;
-                  doc.setFontSize(optimalFontSize);
-                  wrappedLines = doc.splitTextToSize(productNameStr, maxTextWidth);
-                }
-
-                doc.setFontSize(optimalFontSize);
-                if (isOutOfStock) {
-                  doc.setTextColor(156, 163, 175);
-                } else {
-                  doc.setTextColor(15, 23, 42);
-                }
-
-                const lineSpacing = optimalFontSize * 0.38;
-                const nameStartY = imgY_base + imgBoxH + (wrappedLines.length === 1 ? 5.2 : 3.8);
-
-                if (wrappedLines.length === 1) {
-                  doc.text(wrappedLines[0], textX, nameStartY);
-                } else {
-                  doc.text(wrappedLines[0], textX, nameStartY);
-                  let line2 = wrappedLines[1] || "";
-                  if (wrappedLines.length > 2) {
-                    while (doc.getTextWidth(line2 + "...") > maxTextWidth && line2.length > 1) {
-                      line2 = line2.slice(0, -1);
-                    }
-                    line2 = line2 + "...";
-                  }
-                  doc.text(line2, textX, nameStartY + lineSpacing);
-                }
-              } else {
-                const textImg = createCanvasTextDataUrl(
-                  productNameStr,
-                  cardW - 2.4,
-                  isOutOfStock ? "#9ca3af" : "#0f172a"
-                );
-                if (textImg.dataUrl) {
-                  doc.addImage(textImg.dataUrl, "PNG", textX, imgY_base + imgBoxH + 1.8, textImg.widthMm, textImg.heightMm);
-                }
-              }
-
-              // 4. Price Tag at the space UNDER Product Name (not inside the picture)
               // User requirement: "regarding the pdf, make the number bigger but keep the layout intact (16 tiles per page)"
               const priceVal = parseFloat(getProductPrice(p));
               const priceStr = priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : (fontAdded ? "請詢價" : "Inquire");
 
-              // Significantly enlarged font size for price numbers (from 9.5pt to 15.0pt)
-              let priceFontSize = 15.0;
+              // Enlarged font size for price numbers (16.0pt bold)
+              let priceFontSize = 16.0;
               if (fontAdded) {
                 doc.setFont("NotoSansTC", "bold");
               } else {
@@ -1818,17 +1770,81 @@ export default function App() {
               let pWidth = doc.getTextWidth(priceStr);
 
               // Auto-scale font down if the price string is unusually wide so it never exceeds card width
-              while (pWidth > (maxTextWidth - 4.0) && priceFontSize > 10.0) {
+              while (pWidth > (maxTextWidth - 4.0) && priceFontSize > 11.0) {
                 priceFontSize -= 0.5;
                 doc.setFontSize(priceFontSize);
                 pWidth = doc.getTextWidth(priceStr);
               }
 
-              const badgeW = Math.min(maxTextWidth, Math.max(26, pWidth + 4.8));
-              const badgeH = 7.6;
+              const badgeW = Math.min(maxTextWidth, Math.max(28, pWidth + 5.0));
+              const badgeH = 8.2;
               const badgeX = textX;
-              const badgeY = cy + cardH - badgeH - 1.2;
+              const badgeY = cy + cardH - badgeH - 1.0;
 
+              if (fontAdded) {
+                // Dynamically reduce text size so the FULL product name is always shown without any truncation ("...")
+                const nameBoxTop = imgY_base + imgBoxH + 1.0;
+                const nameBoxBottom = badgeY - 0.8;
+                const availableNameHeight = Math.max(12, nameBoxBottom - nameBoxTop); // ~16.5 mm
+
+                let optimalFontSize = 13.0; // Start at 13.0pt
+                doc.setFont("NotoSansTC", "bold");
+                doc.setFontSize(optimalFontSize);
+                let wrappedLines = doc.splitTextToSize(productNameStr, maxTextWidth);
+                let lineSpacing = optimalFontSize * 0.38;
+                let totalTextHeight = (wrappedLines.length - 1) * lineSpacing + (optimalFontSize * 0.35);
+
+                // Step 1: If more than 2 lines, try decreasing font size down to 8.0pt to fit within 2 lines
+                while (wrappedLines.length > 2 && optimalFontSize > 8.0) {
+                  optimalFontSize -= 0.4;
+                  doc.setFontSize(optimalFontSize);
+                  wrappedLines = doc.splitTextToSize(productNameStr, maxTextWidth);
+                  lineSpacing = optimalFontSize * 0.38;
+                  totalTextHeight = (wrappedLines.length - 1) * lineSpacing + (optimalFontSize * 0.35);
+                }
+
+                // Step 2: If still > 2 lines or text height exceeds available space, reduce further down to 6.0pt so up to 3-4 lines comfortably fit
+                while ((totalTextHeight > availableNameHeight || (wrappedLines.length > 3 && optimalFontSize > 6.0))) {
+                  optimalFontSize -= 0.4;
+                  doc.setFontSize(optimalFontSize);
+                  wrappedLines = doc.splitTextToSize(productNameStr, maxTextWidth);
+                  lineSpacing = optimalFontSize * 0.38;
+                  totalTextHeight = (wrappedLines.length - 1) * lineSpacing + (optimalFontSize * 0.35);
+                }
+
+                doc.setFontSize(optimalFontSize);
+                if (isOutOfStock) {
+                  doc.setTextColor(156, 163, 175);
+                } else {
+                  doc.setTextColor(15, 23, 42);
+                }
+
+                // Calculate vertical position based on line count for balanced spacing
+                let nameStartY: number;
+                if (wrappedLines.length === 1) {
+                  nameStartY = imgY_base + imgBoxH + 4.8;
+                } else if (wrappedLines.length === 2) {
+                  nameStartY = imgY_base + imgBoxH + 3.4;
+                } else {
+                  nameStartY = imgY_base + imgBoxH + 2.2;
+                }
+
+                // Render ALL lines of the product name (NO truncation, NO ellipsis)
+                for (let lIdx = 0; lIdx < wrappedLines.length; lIdx++) {
+                  doc.text(wrappedLines[lIdx], textX, nameStartY + (lIdx * lineSpacing));
+                }
+              } else {
+                const textImg = createCanvasTextDataUrl(
+                  productNameStr,
+                  cardW - 2.4,
+                  isOutOfStock ? "#9ca3af" : "#0f172a"
+                );
+                if (textImg.dataUrl) {
+                  doc.addImage(textImg.dataUrl, "PNG", textX, imgY_base + imgBoxH + 1.2, textImg.widthMm, textImg.heightMm);
+                }
+              }
+
+              // 4. Price Tag at the space UNDER Product Name (not inside the picture)
               // Clean price tag badge with subtle border
               if (isOutOfStock) {
                 doc.setFillColor(241, 245, 249);
@@ -1845,7 +1861,13 @@ export default function App() {
               } else {
                 doc.setTextColor(15, 23, 42);
               }
-              doc.text(priceStr, badgeX + 2.2, badgeY + 5.5);
+              doc.setFontSize(priceFontSize);
+              if (fontAdded) {
+                doc.setFont("NotoSansTC", "bold");
+              } else {
+                doc.setFont("helvetica", "bold");
+              }
+              doc.text(priceStr, badgeX + 2.5, badgeY + 6.0);
               if (fontAdded) {
                 doc.setFont("NotoSansTC", "normal");
               }
@@ -6871,6 +6893,9 @@ function doPost(e) {
       if (!sheet) {
         sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
       }
+      if (sheet.getMaxColumns() < 32) {
+        sheet.insertColumnsAfter(sheet.getMaxColumns(), 32 - sheet.getMaxColumns());
+      }
       
       var name = param.name;
       var id = param.id;
@@ -8741,8 +8766,8 @@ function revertStockForOrders(orderIdsMap) {
                             </div>
                             {/* Info */}
                             <div className="pt-1.5 px-0.5 min-w-0 flex flex-col justify-between flex-1">
-                              <h4 className="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">{p.costName || p.name}</h4>
-                              <div className="mt-1.5 self-start bg-slate-50 text-slate-900 border border-slate-200 px-2 py-0.5 rounded text-xs sm:text-sm font-black tracking-tight">
+                              <h4 className="font-bold text-xs text-slate-800 break-words line-clamp-3 leading-snug">{p.costName || p.name}</h4>
+                              <div className="mt-1.5 self-start bg-slate-50 text-slate-900 border border-slate-200 px-2 py-0.5 rounded text-sm font-black tracking-tight">
                                 {priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : "請詢價"}
                               </div>
                             </div>
@@ -8842,8 +8867,8 @@ function revertStockForOrders(orderIdsMap) {
                     </div>
                     {/* Info */}
                     <div className="pt-1.5 px-0.5 min-w-0 flex flex-col justify-between flex-1">
-                      <h4 className="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">{p.costName || p.name}</h4>
-                      <div className="mt-1.5 self-start bg-slate-50 text-slate-900 border border-slate-200 px-2 py-0.5 rounded text-xs sm:text-sm font-black tracking-tight">
+                      <h4 className="font-bold text-xs text-slate-800 break-words line-clamp-3 leading-snug">{p.costName || p.name}</h4>
+                      <div className="mt-1.5 self-start bg-slate-50 text-slate-900 border border-slate-200 px-2 py-0.5 rounded text-sm font-black tracking-tight">
                         {priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價"}
                       </div>
                     </div>
