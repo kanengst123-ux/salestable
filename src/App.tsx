@@ -52,7 +52,9 @@ import {
   History,
   ArrowRight,
   CheckSquare,
-  Printer
+  Printer,
+  Tag,
+  Calendar
 } from "lucide-react";
 import { initDriveAuth, googleDriveSignIn, driveLogout, getDriveAccessToken } from "./lib/driveAuth";
 import { uploadImageToDrive } from "./lib/driveSync";
@@ -2512,6 +2514,400 @@ export default function App() {
   const [loadingPurchases, setLoadingPurchases] = useState<boolean>(false);
   const [purchaseSearch, setPurchaseSearch] = useState<string>("");
 
+  // Sales Promotion (銷售訊息) States & Handlers
+  const [isSalesPromoOpen, setIsSalesPromoOpen] = useState<boolean>(false);
+  const [promoSearchQuery, setPromoSearchQuery] = useState<string>("");
+  const [promoStartDate, setPromoStartDate] = useState<string>(() => {
+    return new Date().toISOString().slice(0, 10);
+  });
+  const [promoEndDate, setPromoEndDate] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 3);
+    return d.toISOString().slice(0, 10);
+  });
+  const [selectedPromoItems, setSelectedPromoItems] = useState<{
+    id: string;
+    name: string;
+    price: string;
+    originalPrice: string;
+  }[]>([]);
+  const [savedPromotions, setSavedPromotions] = useState<any[]>([]);
+  const [loadingPromotions, setLoadingPromotions] = useState<boolean>(false);
+  const [isSavingPromo, setIsSavingPromo] = useState<boolean>(false);
+  const [isGeneratingPromoPdf, setIsGeneratingPromoPdf] = useState<boolean>(false);
+  const [promoModalTab, setPromoModalTab] = useState<"create" | "history">("create");
+
+  const fetchSavedPromotions = async () => {
+    try {
+      setLoadingPromotions(true);
+      const res = await fetch("/api/sales-promotions");
+      if (res.ok) {
+        const data = await res.json();
+        setSavedPromotions(Array.isArray(data) ? data : []);
+      }
+    } catch (e) {
+      console.error("Failed to fetch promotions:", e);
+    } finally {
+      setLoadingPromotions(false);
+    }
+  };
+
+  // Admin Table Pagination state
+  const [adminTablePageSize, setAdminTablePageSize] = useState<number>(50);
+  const [adminTableCurrentPage, setAdminTableCurrentPage] = useState<number>(1);
+
+  // Format date helper for promotion (e.g., 2026-10-07 -> 07/10/2026)
+  const formatPromoDate = (dateStr: string) => {
+    if (!dateStr) return "";
+    const parts = dateStr.split("-");
+    if (parts.length === 3) {
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    return dateStr;
+  };
+
+  // Promotion search results
+  const promoSearchResults = useMemo(() => {
+    if (!promoSearchQuery.trim()) return [];
+    const q = promoSearchQuery.toLowerCase().trim();
+    const words = q.split(/\s+/).filter(Boolean);
+    return products.filter(p => {
+      const pName = (p.costName || p.name || "").toLowerCase();
+      const pId = (p.id || "").toLowerCase();
+      return words.every(w => pName.includes(w) || pId.includes(w));
+    }).slice(0, 50);
+  }, [promoSearchQuery, products]);
+
+  const handleTogglePromoItem = (prod: Product) => {
+    setSelectedPromoItems(prev => {
+      const existing = prev.find(it => it.id === prod.id);
+      if (existing) {
+        return prev.filter(it => it.id !== prod.id);
+      } else {
+        const curPrice = getProductPrice(prod);
+        return [...prev, {
+          id: prod.id,
+          name: prod.costName || prod.name,
+          price: curPrice,
+          originalPrice: curPrice
+        }];
+      }
+    });
+  };
+
+  const handleSelectAllPromoResults = () => {
+    setSelectedPromoItems(prev => {
+      const existingIds = new Set(prev.map(it => it.id));
+      const toAdd = promoSearchResults
+        .filter(p => !existingIds.has(p.id))
+        .map(p => {
+          const curPrice = getProductPrice(p);
+          return {
+            id: p.id,
+            name: p.costName || p.name,
+            price: curPrice,
+            originalPrice: curPrice
+          };
+        });
+      return [...prev, ...toAdd];
+    });
+  };
+
+  const handleUpdatePromoItemPrice = (id: string, newPrice: string) => {
+    setSelectedPromoItems(prev => prev.map(it => {
+      if (it.id === id) {
+        return { ...it, price: newPrice };
+      }
+      return it;
+    }));
+  };
+
+  const handleRemovePromoItem = (id: string) => {
+    setSelectedPromoItems(prev => prev.filter(it => it.id !== id));
+  };
+
+  const handleBatchDiscount = (discountMultiplier: number) => {
+    setSelectedPromoItems(prev => prev.map(it => {
+      const orig = parseFloat(it.originalPrice) || 0;
+      const discounted = (orig * discountMultiplier).toFixed(2);
+      return { ...it, price: discounted };
+    }));
+  };
+
+  const handleBatchDeduct = (amount: number) => {
+    setSelectedPromoItems(prev => prev.map(it => {
+      const orig = parseFloat(it.originalPrice) || 0;
+      const discounted = Math.max(0, orig - amount).toFixed(2);
+      return { ...it, price: discounted };
+    }));
+  };
+
+  const handleSavePromotion = async () => {
+    if (selectedPromoItems.length === 0) {
+      showToast("請先搜尋並選取至少一款促銷商品！");
+      return;
+    }
+    if (!promoStartDate || !promoEndDate) {
+      showToast("請選擇有效的促銷日期區間！");
+      return;
+    }
+    if (promoStartDate > promoEndDate) {
+      showToast("開始日期不能晚於結束日期！");
+      return;
+    }
+
+    try {
+      setIsSavingPromo(true);
+      const res = await fetch("/api/sales-promotions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          startDate: promoStartDate,
+          endDate: promoEndDate,
+          items: selectedPromoItems.map(it => ({
+            productId: it.id,
+            productName: it.name,
+            originalPrice: it.originalPrice,
+            promoPrice: it.price
+          }))
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "儲存銷售促銷失敗");
+      }
+
+      if (data.appliedNow) {
+        setProducts(prev => {
+          return prev.map(p => {
+            const matched = selectedPromoItems.find(it => it.id === p.id);
+            if (matched) {
+              const updatedVals = [...(p.allValues || [])];
+              while (updatedVals.length < 33) updatedVals.push("");
+              updatedVals[14] = matched.price;
+              return {
+                ...p,
+                price: matched.price,
+                allValues: updatedVals
+              };
+            }
+            return p;
+          });
+        });
+        showToast(`✅ 銷售訊息儲存成功！共 ${selectedPromoItems.length} 款商品特價已生效並同步至 Google Sheet raw 分頁 Col O (Price)！促銷期過後將自動還原。`);
+      } else {
+        showToast(`✅ 銷售訊息已成功排程！將於 ${formatPromoDate(promoStartDate)} 自動生效並同步至 Google Sheet raw 分頁 Col O (Price)。`);
+      }
+
+      fetchSavedPromotions();
+      setPromoModalTab("history");
+    } catch (err: any) {
+      console.error("Save promotion error:", err);
+      showToast("儲存失敗：" + err.message);
+    } finally {
+      setIsSavingPromo(false);
+    }
+  };
+
+  const handleRevertPromotion = async (campaignId: string) => {
+    if (!confirm("確定要手動提前還原此促銷特價，回復原價嗎？")) return;
+    try {
+      const res = await fetch(`/api/sales-promotions/${campaignId}/revert`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "還原失敗");
+      showToast("已成功還原原價，並同步寫入 Google Sheet raw 分頁 Col O (Price)！");
+      fetchSavedPromotions();
+      loadProducts(true);
+    } catch (err: any) {
+      showToast("還原失敗：" + err.message);
+    }
+  };
+
+  const handleDeletePromotion = async (campaignId: string) => {
+    if (!confirm("確定要刪除此筆銷售訊息記錄嗎？")) return;
+    try {
+      const res = await fetch(`/api/sales-promotions/${campaignId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "刪除失敗");
+      showToast("已成功刪除記錄！");
+      fetchSavedPromotions();
+    } catch (err: any) {
+      showToast("刪除失敗：" + err.message);
+    }
+  };
+
+  const handleGeneratePromoPdf = async (customItems?: typeof selectedPromoItems, customStart?: string, customEnd?: string) => {
+    const itemsToExport = customItems || selectedPromoItems;
+    const startStr = customStart || promoStartDate;
+    const endStr = customEnd || promoEndDate;
+
+    if (itemsToExport.length === 0) {
+      showToast("促銷商品清單為空，請先加入商品！");
+      return;
+    }
+
+    try {
+      setIsGeneratingPromoPdf(true);
+      showToast(`正在產生簡易銷售訊息特價 PDF... (共 ${itemsToExport.length} 款商品)`);
+
+      const doc = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+      });
+
+      let fontAdded = false;
+      if (typeof window !== "undefined" && (window as any).__CACHED_NOTO_FONT__) {
+        try {
+          doc.addFileToVFS("NotoSansTC-Regular.ttf", (window as any).__CACHED_NOTO_FONT__);
+          doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "normal");
+          doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "bold");
+          doc.setFont("NotoSansTC", "normal");
+          fontAdded = true;
+        } catch (e) {}
+      }
+
+      if (!fontAdded) {
+        try {
+          const localFontUrl = "/fonts/NotoSansTC-Regular.ttf";
+          const apiFontUrl = "/api/fonts/NotoSansTC-Regular.ttf";
+          let r = await fetch(localFontUrl).catch(() => null);
+          if (!r || !r.ok) r = await fetch(apiFontUrl).catch(() => null);
+          if (r && r.ok) {
+            const fontBuffer = await r.arrayBuffer();
+            const bytes = new Uint8Array(fontBuffer);
+            let binary = "";
+            for (let i = 0; i < bytes.byteLength; i++) {
+              binary += String.fromCharCode(bytes[i]);
+            }
+            const fontBase64 = btoa(binary);
+            (window as any).__CACHED_NOTO_FONT__ = fontBase64;
+            doc.addFileToVFS("NotoSansTC-Regular.ttf", fontBase64);
+            doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "normal");
+            doc.addFont("NotoSansTC-Regular.ttf", "NotoSansTC", "bold");
+            doc.setFont("NotoSansTC", "normal");
+            fontAdded = true;
+          }
+        } catch (e) {
+          console.warn("Font loading fallback in promo PDF:", e);
+        }
+      }
+
+      const displayStart = formatPromoDate(startStr);
+      const displayEnd = formatPromoDate(endStr);
+      const pageWidth = 210;
+      const margin = 14;
+      const usableWidth = pageWidth - margin * 2; // 182mm
+      const col1Width = 138;
+      const col2Width = 44;
+
+      let currentY = 18;
+      let pageNumber = 1;
+
+      const drawPageHeader = (pNum: number) => {
+        doc.setFillColor(248, 250, 252);
+        doc.rect(margin, 10, usableWidth, 24, "F");
+        doc.setDrawColor(203, 213, 225);
+        doc.rect(margin, 10, usableWidth, 24, "S");
+
+        doc.setFontSize(16);
+        doc.setTextColor(15, 23, 42);
+        if (fontAdded) {
+          doc.setFont("NotoSansTC", "bold");
+          doc.text("銷售訊息 • 特價商品清單", margin + 6, 20);
+          doc.setFontSize(10);
+          doc.setFont("NotoSansTC", "normal");
+          doc.setTextColor(71, 85, 105);
+          doc.text(`促銷特價期間: ${displayStart} 至 ${displayEnd}  •  共 ${itemsToExport.length} 款特價商品`, margin + 6, 28);
+        } else {
+          doc.text("Sales Promotion Price List", margin + 6, 20);
+          doc.setFontSize(10);
+          doc.setTextColor(71, 85, 105);
+          doc.text(`Period: ${displayStart} to ${displayEnd}  •  ${itemsToExport.length} Items`, margin + 6, 28);
+        }
+
+        const thY = 38;
+        doc.setFillColor(30, 41, 59);
+        doc.rect(margin, thY, usableWidth, 9, "F");
+        doc.setFontSize(11);
+        doc.setTextColor(255, 255, 255);
+        if (fontAdded) doc.setFont("NotoSansTC", "bold");
+        doc.text("商品名稱", margin + 6, thY + 6.2);
+        doc.text("特惠售價 (HK$)", margin + col1Width + 6, thY + 6.2);
+
+        return thY + 9;
+      };
+
+      currentY = drawPageHeader(pageNumber);
+
+      for (let i = 0; i < itemsToExport.length; i++) {
+        const item = itemsToExport[i];
+        const rowHeight = 11;
+
+        if (currentY + rowHeight > 280) {
+          doc.setFontSize(8);
+          doc.setTextColor(148, 163, 184);
+          doc.text(`第 ${pageNumber} 頁`, pageWidth / 2, 290, { align: "center" });
+
+          doc.addPage();
+          pageNumber++;
+          currentY = drawPageHeader(pageNumber);
+        }
+
+        if (i % 2 === 1) {
+          doc.setFillColor(248, 250, 252);
+          doc.rect(margin, currentY, usableWidth, rowHeight, "F");
+        }
+        doc.setDrawColor(226, 232, 240);
+        doc.line(margin, currentY + rowHeight, margin + usableWidth, currentY + rowHeight);
+
+        // Product Name (Col 1)
+        doc.setTextColor(15, 23, 42);
+        doc.setFontSize(10);
+        if (fontAdded) {
+          doc.setFont("NotoSansTC", "normal");
+          const splitName = doc.splitTextToSize(item.name, col1Width - 10);
+          doc.text(splitName[0] || "", margin + 4, currentY + 7);
+          if (splitName[1]) {
+            doc.setFontSize(8.5);
+            doc.text(splitName[1], margin + 4, currentY + 10);
+          }
+        } else {
+          const resImg = createCanvasTextDataUrl(item.name, 400, "#0f172a");
+          if (resImg.dataUrl) {
+            doc.addImage(resImg.dataUrl, "PNG", margin + 4, currentY + 1.5, col1Width - 10, 8);
+          } else {
+            doc.text(item.name.substring(0, 30), margin + 4, currentY + 7);
+          }
+        }
+
+        // Price (Col 2)
+        doc.setTextColor(185, 28, 28);
+        doc.setFontSize(12);
+        if (fontAdded) doc.setFont("NotoSansTC", "bold");
+        const priceNum = parseFloat(item.price) || 0;
+        const priceStr = `HK$${priceNum.toFixed(2)}`;
+        doc.text(priceStr, margin + col1Width + 6, currentY + 7.5);
+
+        currentY += rowHeight;
+      }
+
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`第 ${pageNumber} 頁  •  產生時間: ${new Date().toLocaleString("zh-HK")}`, pageWidth / 2, 290, { align: "center" });
+
+      const filename = `銷售訊息特價單_${displayStart.replace(/\//g, "-")}_至_${displayEnd.replace(/\//g, "-")}.pdf`;
+      doc.save(filename);
+      showToast("簡易銷售特價 PDF 匯出成功！");
+    } catch (err: any) {
+      console.error("Promo PDF export error:", err);
+      showToast("匯出 PDF 失敗：" + err.message);
+    } finally {
+      setIsGeneratingPromoPdf(false);
+    }
+  };
+
   const fetchPurchases = async () => {
     try {
       setLoadingPurchases(true);
@@ -2798,6 +3194,7 @@ export default function App() {
             updatedAllValues[28] = matched.quantityTo.toString();
             return {
               ...p,
+              extraAttributes: p.extraAttributes || {},
               hasStock: true,
               alwaysStock: false,
               secondaryStockCount: matched.quantityTo.toString(),
@@ -3298,7 +3695,10 @@ export default function App() {
         for (const p of data.products) {
           if (p && p.id && !seenIds.has(p.id)) {
             seenIds.add(p.id);
-            uniqueProducts.push(p);
+            uniqueProducts.push({
+              ...p,
+              extraAttributes: p.extraAttributes || {}
+            });
           }
         }
         setProducts(uniqueProducts);
@@ -3349,7 +3749,10 @@ export default function App() {
 
         if (cachedProductsStr) {
           const parsedProducts = JSON.parse(cachedProductsStr);
-          setProducts(parsedProducts);
+          const sanitizedProducts = Array.isArray(parsedProducts)
+            ? parsedProducts.map((p: any) => ({ ...p, extraAttributes: p?.extraAttributes || {} }))
+            : [];
+          setProducts(sanitizedProducts);
           setUsingOfflineBackup(true);
           if (cachedCostStr) {
             setCostCategories(JSON.parse(cachedCostStr));
@@ -3474,7 +3877,7 @@ export default function App() {
   const categoryStructure = useMemo(() => {
     const map: Record<string, Set<string>> = {};
     products.forEach(p => {
-      const rawCat = p.extraAttributes["Categories"] || "";
+      const rawCat = p.extraAttributes?.["Categories"] || "";
       if (rawCat.trim() === "") {
         if (!map["Other"]) map["Other"] = new Set<string>();
         map["Other"].add("Uncategorized");
@@ -3502,7 +3905,7 @@ export default function App() {
   const topCategories = useMemo(() => {
     const counts: Record<string, number> = {};
     products.forEach(p => {
-      const rawCat = p.extraAttributes["Categories"] || "";
+      const rawCat = p.extraAttributes?.["Categories"] || "";
       const parent = rawCat.split("/")[0]?.trim() || "Other";
       counts[parent] = (counts[parent] || 0) + 1;
     });
@@ -3528,18 +3931,18 @@ export default function App() {
     if (searchQuery.trim() !== "") {
       const query = searchQuery.toLowerCase().trim();
       result = result.filter(p => 
-        p.name.toLowerCase().includes(query) || 
-        p.id.toLowerCase().includes(query) ||
-        (p.extraAttributes["Categories"] || "").toLowerCase().includes(query) ||
-        (p.extraAttributes["Hashtags"] || "").toLowerCase().includes(query) ||
-        (p.extraAttributes["Merchant Remark"] || "").toLowerCase().includes(query)
+        (p.name || "").toLowerCase().includes(query) || 
+        (p.id || "").toLowerCase().includes(query) ||
+        (p.extraAttributes?.["Categories"] || "").toLowerCase().includes(query) ||
+        (p.extraAttributes?.["Hashtags"] || "").toLowerCase().includes(query) ||
+        (p.extraAttributes?.["Merchant Remark"] || "").toLowerCase().includes(query)
       );
     }
 
     // 2. Category Filter
     if (selectedParentCategory !== "All") {
       result = result.filter(p => {
-        const rawCat = p.extraAttributes["Categories"] || "";
+        const rawCat = p.extraAttributes?.["Categories"] || "";
         const parent = rawCat.split("/")[0]?.trim() || "Other";
         
         if (parent !== selectedParentCategory) return false;
@@ -3624,6 +4027,20 @@ export default function App() {
   const paginatedProducts = useMemo(() => {
     return processedProducts;
   }, [processedProducts]);
+
+  // Admin Table Pagination calculations
+  const adminTotalPages = adminTablePageSize === 0 ? 1 : Math.max(1, Math.ceil(processedProducts.length / adminTablePageSize));
+  const displayedAdminProducts = useMemo(() => {
+    if (adminTablePageSize === 0) return processedProducts;
+    const start = (adminTableCurrentPage - 1) * adminTablePageSize;
+    return processedProducts.slice(start, start + adminTablePageSize);
+  }, [processedProducts, adminTableCurrentPage, adminTablePageSize]);
+
+  useEffect(() => {
+    if (adminTableCurrentPage > adminTotalPages) {
+      setAdminTableCurrentPage(1);
+    }
+  }, [adminTotalPages, adminTableCurrentPage]);
 
   // Adjust page index if filters result in fewer pages
   useEffect(() => {
@@ -3988,23 +4405,24 @@ export default function App() {
 
           <main className="max-w-7xl mx-auto px-4 md:px-6 py-6 lg:py-8 space-y-6 w-full max-w-full overflow-hidden">
             {/* Quick Stats Summary row */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 animate-fadeIn">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 animate-fadeIn">
               {/* Card 1: 目錄商品總數 */}
               <button
                 onClick={() => {
                   setStockFilter("all");
                   setCurrentPage(1);
+                  setAdminTableCurrentPage(1);
                 }}
-                className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+                className={`text-left p-3.5 rounded-2xl border transition-all cursor-pointer ${
                   stockFilter === "all"
                     ? "bg-slate-900 text-white border-slate-900 shadow-md scale-[1.02]"
                     : "bg-white text-slate-900 border-slate-100 hover:border-slate-300 hover:shadow-xs"
                 }`}
               >
-                <span className={`text-[10px] uppercase tracking-wider font-bold block ${stockFilter === "all" ? "text-slate-300" : "text-slate-400"}`}>目錄商品總數</span>
+                <span className={`text-[10px] uppercase tracking-wider font-bold block ${stockFilter === "all" ? "text-slate-300" : "text-slate-400"}`}>全部商品 (可編輯)</span>
                 <span className="text-2xl font-black mt-1 block">{products.length}</span>
                 <span className={`text-[10px] block mt-1.5 font-medium ${stockFilter === "all" ? "text-slate-400" : "text-slate-500"}`}>
-                  {stockFilter === "all" ? "✓ 正在篩選全部" : "點擊篩選全部"}
+                  {stockFilter === "all" ? "✓ 正在顯示全部" : "點擊顯示全部商品"}
                 </span>
               </button>
 
@@ -4013,8 +4431,9 @@ export default function App() {
                 onClick={() => {
                   setStockFilter("in-stock");
                   setCurrentPage(1);
+                  setAdminTableCurrentPage(1);
                 }}
-                className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+                className={`text-left p-3.5 rounded-2xl border transition-all cursor-pointer ${
                   stockFilter === "in-stock"
                     ? "bg-emerald-50 border-emerald-500 text-emerald-900 shadow-sm scale-[1.02]"
                     : "bg-white text-slate-900 border-slate-100 hover:border-slate-300 hover:shadow-xs"
@@ -4034,8 +4453,9 @@ export default function App() {
                 onClick={() => {
                   setStockFilter("always-stock");
                   setCurrentPage(1);
+                  setAdminTableCurrentPage(1);
                 }}
-                className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+                className={`text-left p-3.5 rounded-2xl border transition-all cursor-pointer ${
                   stockFilter === "always-stock"
                     ? "bg-indigo-50 border-indigo-500 text-indigo-900 shadow-sm scale-[1.02]"
                     : "bg-white text-slate-900 border-slate-100 hover:border-slate-300 hover:shadow-xs"
@@ -4055,8 +4475,9 @@ export default function App() {
                 onClick={() => {
                   setStockFilter("zero-stock");
                   setCurrentPage(1);
+                  setAdminTableCurrentPage(1);
                 }}
-                className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+                className={`text-left p-3.5 rounded-2xl border transition-all cursor-pointer ${
                   stockFilter === "zero-stock"
                     ? "bg-rose-50 border-rose-400 text-rose-900 shadow-sm scale-[1.02]"
                     : "bg-white text-slate-900 border-slate-100 hover:border-slate-300 hover:shadow-xs"
@@ -4076,19 +4497,43 @@ export default function App() {
                 onClick={() => {
                   setStockFilter("dead-stock");
                   setCurrentPage(1);
+                  setAdminTableCurrentPage(1);
                 }}
-                className={`text-left p-4 rounded-2xl border transition-all cursor-pointer ${
+                className={`text-left p-3.5 rounded-2xl border transition-all cursor-pointer ${
                   stockFilter === "dead-stock"
                     ? "bg-amber-50 border-amber-500 text-amber-900 shadow-sm scale-[1.02]"
                     : "bg-white text-slate-900 border-slate-100 hover:border-slate-300 hover:shadow-xs"
                 }`}
               >
-                <span className={`text-[10px] uppercase tracking-wider font-bold block ${stockFilter === "dead-stock" ? "text-amber-600" : "text-slate-400"}`}>死貨</span>
-                <span className={`text-2xl font-black mt-1 block ${stockFilter === "dead-stock" ? "text-amber-700" : "text-amber-600"}`}>
+                <span className={`text-[10px] uppercase tracking-wider font-bold block ${stockFilter === "dead-stock" ? "text-amber-600" : "text-slate-400"}`}>死貨排行</span>
+                <span className="text-2xl font-black mt-1 block text-amber-700">
                   {deadStockCount}
                 </span>
                 <span className={`text-[10px] block mt-1.5 font-medium ${stockFilter === "dead-stock" ? "text-amber-600" : "text-slate-500"}`}>
-                  {stockFilter === "dead-stock" ? "✓ 正在篩選死貨" : "2週未售出，庫存x售價排行"}
+                  {stockFilter === "dead-stock" ? "✓ 正在篩選死貨" : "2週未售出，庫存x售價"}
+                </span>
+              </button>
+
+              {/* Card 6: PDF 隱藏商品 (Col AE: N) - Per user requirement: Make all products available for 編輯 */}
+              <button
+                onClick={() => {
+                  setStockFilter("pdf-hidden");
+                  setCurrentPage(1);
+                  setAdminTableCurrentPage(1);
+                }}
+                className={`text-left p-3.5 rounded-2xl border transition-all cursor-pointer ${
+                  stockFilter === "pdf-hidden"
+                    ? "bg-amber-500 text-white border-amber-600 shadow-md scale-[1.02]"
+                    : "bg-white text-slate-900 border-slate-100 hover:border-amber-300 hover:shadow-xs"
+                }`}
+                title="Google Sheet raw 分頁 Col AE 設為 N 的所有商品（全部可編輯）"
+              >
+                <span className={`text-[10px] uppercase tracking-wider font-bold block ${stockFilter === "pdf-hidden" ? "text-amber-100" : "text-amber-700"}`}>PDF 隱藏 (Col AE: N)</span>
+                <span className="text-2xl font-black mt-1 block">
+                  {products.filter(p => !isProductShowOnPdf(p)).length}
+                </span>
+                <span className={`text-[10px] block mt-1.5 font-medium ${stockFilter === "pdf-hidden" ? "text-amber-100" : "text-slate-500"}`}>
+                  {stockFilter === "pdf-hidden" ? "✓ 正在篩選此類商品" : "未列入PDF (全部可編輯)"}
                 </span>
               </button>
             </div>
@@ -4106,6 +4551,7 @@ export default function App() {
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
+                    {/* 1. 新增商品 */}
                     <button
                       onClick={() => {
                         setNewProductId(`id-${Math.floor(1000000000000000 + Math.random() * 9000000000000000)}`);
@@ -4124,24 +4570,21 @@ export default function App() {
                       <span className="text-[9px] text-slate-400 font-medium font-bold">建立本地自訂 SKU</span>
                     </button>
 
+                    {/* 2. 銷售訊息 (Next to 新增商品) */}
                     <button
-                      onClick={() => setIsUploadOpen(true)}
-                      className="p-3 text-left rounded-xl border border-slate-100 hover:border-indigo-100 bg-slate-50 hover:bg-indigo-50/20 text-slate-800 transition-all flex flex-col gap-1 cursor-pointer"
+                      onClick={() => {
+                        fetchSavedPromotions();
+                        setIsSalesPromoOpen(true);
+                      }}
+                      className="p-3 text-left rounded-xl border border-rose-200/80 hover:border-rose-400 bg-rose-50/50 hover:bg-rose-100/60 text-slate-800 transition-all flex flex-col gap-1 cursor-pointer group shadow-xs"
+                      title="設定特定日期區間的特價銷售，促銷期內自動寫入 Col O (Price)，結束後自動還原"
                     >
-                      <Upload className="w-4 h-4 text-indigo-600" />
-                      <span className="font-bold text-[11px] block mt-1 text-slate-900">批次傳圖</span>
-                      <span className="text-[9px] text-slate-400 font-medium font-bold">批次上傳商品圖片</span>
+                      <Tag className="w-4 h-4 text-rose-600 group-hover:scale-110 transition-transform" />
+                      <span className="font-bold text-[11px] block mt-1 text-rose-950">銷售訊息</span>
+                      <span className="text-[9px] text-rose-600 font-bold">限期特價 / 匯出 PDF</span>
                     </button>
 
-                    <button
-                      onClick={() => setIsFolderExplorerOpen(true)}
-                      className="p-3 text-left rounded-xl border border-slate-100 hover:border-indigo-100 bg-slate-50 hover:bg-indigo-50/20 text-slate-800 transition-all flex flex-col gap-1 cursor-pointer"
-                    >
-                      <FolderOpen className="w-4 h-4 text-indigo-600" />
-                      <span className="font-bold text-[11px] block mt-1 text-slate-900">瀏覽相片庫</span>
-                      <span className="text-[9px] text-slate-400 font-medium font-bold">管理上傳的靜態資源相片</span>
-                    </button>
-
+                    {/* 3. 強制同步表格 */}
                     <button
                       onClick={() => loadProducts(true)}
                       disabled={syncing}
@@ -4149,35 +4592,23 @@ export default function App() {
                     >
                       <RefreshCw className={`w-4 h-4 text-indigo-600 ${syncing ? "animate-spin" : ""}`} />
                       <span className="font-bold text-[11px] block mt-1 text-slate-900">強制同步表格</span>
-                      <span className="text-[9px] text-slate-400 font-medium font-bold">重新獲取 Google Sheets 資料</span>
+                      <span className="text-[9px] text-slate-400 font-medium font-bold">重新獲取 Sheets 資料</span>
                     </button>
 
+                    {/* 4. Purchase 庫存異動記錄 */}
                     <button
                       onClick={() => {
                         fetchPurchases();
                         setIsPurchaseModalOpen(true);
                       }}
-                      className="col-span-2 p-3 text-left rounded-xl border border-emerald-100 hover:border-emerald-300 bg-emerald-50/40 hover:bg-emerald-50/70 text-slate-800 transition-all flex items-center justify-between gap-3 cursor-pointer"
+                      className="p-3 text-left rounded-xl border border-emerald-100 hover:border-emerald-300 bg-emerald-50/40 hover:bg-emerald-50/70 text-slate-800 transition-all flex flex-col gap-1 cursor-pointer"
                     >
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-emerald-100/80 flex items-center justify-center shrink-0">
-                          <ClipboardList className="w-4.5 h-4.5 text-emerald-700" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-[11px] text-slate-900">Purchase 庫存異動記錄</span>
-                            {purchases.length > 0 && (
-                              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800">
-                                {purchases.length} 筆
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-[9px] text-slate-500 font-medium">查看 5 個欄位：Date, Product, Qty from, Qty to, Net</span>
-                        </div>
-                      </div>
-                      <ChevronRight className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <ClipboardList className="w-4 h-4 text-emerald-700" />
+                      <span className="font-bold text-[11px] block mt-1 text-slate-900">Purchase 異動記錄</span>
+                      <span className="text-[9px] text-slate-400 font-medium font-bold">{purchases.length > 0 ? `${purchases.length} 筆日誌` : "5欄異動記錄"}</span>
                     </button>
 
+                    {/* 5. Google Sheets 連接同步設置 */}
                     <button
                       onClick={() => setIsSheetSettingsOpen(true)}
                       className="col-span-2 p-3 text-left rounded-xl border border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/20 hover:bg-indigo-50/40 text-slate-800 transition-all flex items-center gap-3 cursor-pointer"
@@ -4187,6 +4618,26 @@ export default function App() {
                         <span className="font-bold text-[11px] block text-slate-900">Google Sheets 連接同步設置</span>
                         <span className="text-[9px] text-slate-400 font-medium font-bold">配置實時同步與 Apps Script 設置</span>
                       </div>
+                    </button>
+
+                    {/* 6. 批次傳圖 (At the bottom of the menu) */}
+                    <button
+                      onClick={() => setIsUploadOpen(true)}
+                      className="p-3 text-left rounded-xl border border-slate-200/80 hover:border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-800 transition-all flex flex-col gap-1 cursor-pointer"
+                    >
+                      <Upload className="w-4 h-4 text-slate-600" />
+                      <span className="font-bold text-[11px] block mt-1 text-slate-900">批次傳圖</span>
+                      <span className="text-[9px] text-slate-400 font-medium font-bold">批次上傳商品圖片</span>
+                    </button>
+
+                    {/* 7. 瀏覽相片庫 (At the bottom of the menu) */}
+                    <button
+                      onClick={() => setIsFolderExplorerOpen(true)}
+                      className="p-3 text-left rounded-xl border border-slate-200/80 hover:border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-800 transition-all flex flex-col gap-1 cursor-pointer"
+                    >
+                      <FolderOpen className="w-4 h-4 text-slate-600" />
+                      <span className="font-bold text-[11px] block mt-1 text-slate-900">瀏覽相片庫</span>
+                      <span className="text-[9px] text-slate-400 font-medium font-bold">管理上傳靜態圖片</span>
                     </button>
                   </div>
                 </div>
@@ -4307,9 +4758,9 @@ export default function App() {
                         <th className="w-10 px-3 py-3 text-center">
                           <input 
                             type="checkbox" 
-                            checked={processedProducts.slice(0, 50).length > 0 && processedProducts.slice(0, 50).every(p => tableSelectedProductIds.includes(p.id))} 
+                            checked={displayedAdminProducts.length > 0 && displayedAdminProducts.every(p => tableSelectedProductIds.includes(p.id))} 
                             onChange={() => {
-                              const pageItems = processedProducts.slice(0, 50);
+                              const pageItems = displayedAdminProducts;
                               const isAllSelected = pageItems.every(p => tableSelectedProductIds.includes(p.id));
                               if (isAllSelected) {
                                 const idSet = new Set(pageItems.map(p => p.id));
@@ -4340,7 +4791,7 @@ export default function App() {
                           </td>
                         </tr>
                       ) : (
-                        processedProducts.slice(0, 50).map((prod) => (
+                        displayedAdminProducts.map((prod) => (
                           <tr key={prod.id} className="hover:bg-slate-50/50 transition-all">
                             <td className="px-3 py-2 text-center">
                               <input 
@@ -4359,7 +4810,8 @@ export default function App() {
                                 onClick={() => {
                                   handleStartEditing(prod);
                                 }}
-                                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-all font-bold text-[10px] inline-flex items-center gap-1.5 cursor-pointer"
+                                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-all font-bold text-[10px] inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                                title="編輯此商品（包含名稱、價格、庫存、Col M 備註及 Col AE PDF 顯示開關）"
                               >
                                 <Edit className="w-3 h-3 text-indigo-500" />
                                 <span>編輯</span>
@@ -4369,8 +4821,8 @@ export default function App() {
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="font-bold text-slate-800 line-clamp-1">{prod.name}</span>
                                 {!isProductShowOnPdf(prod) && (
-                                  <span className="shrink-0 text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200" title="此商品在 Col AE 設為 N (不包含於 PDF 目錄)">
-                                    PDF: N
+                                  <span className="shrink-0 text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200" title="此商品在 Col AE 設為 N (不包含於 PDF 目錄，但可在此正常編輯)">
+                                    Col AE: N (未列入PDF)
                                   </span>
                                 )}
                               </div>
@@ -4408,11 +4860,56 @@ export default function App() {
                   </table>
                 </div>
 
-                {processedProducts.length > 50 && (
-                  <p className="text-[10px] text-slate-400 text-center italic mt-2">
-                    後台列表最多顯示前 50 條商品。使用搜尋功能可定位到具體 SKU 商品，或點擊「向客戶展示產品目錄」模式瀏覽。
-                  </p>
-                )}
+                {/* Full Pagination & Page Size Control */}
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
+                  <div className="flex flex-wrap items-center gap-1.5 text-slate-500 text-[11px]">
+                    <span className="font-medium text-slate-600">每頁顯示:</span>
+                    {[50, 100, 250, 0].map(sz => (
+                      <button
+                        key={sz}
+                        type="button"
+                        onClick={() => {
+                          setAdminTablePageSize(sz);
+                          setAdminTableCurrentPage(1);
+                        }}
+                        className={`px-2.5 py-1 rounded-lg border font-bold transition-all cursor-pointer ${
+                          adminTablePageSize === sz 
+                            ? "bg-slate-900 text-white border-slate-900 shadow-xs" 
+                            : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                        }`}
+                      >
+                        {sz === 0 ? `全部 (${processedProducts.length})` : sz}
+                      </button>
+                    ))}
+                    <span className="text-slate-400 ml-1">
+                      • 顯示第 {adminTablePageSize === 0 ? (processedProducts.length > 0 ? 1 : 0) : Math.min((adminTableCurrentPage - 1) * adminTablePageSize + 1, processedProducts.length)} 至 {adminTablePageSize === 0 ? processedProducts.length : Math.min(adminTableCurrentPage * adminTablePageSize, processedProducts.length)} 筆（共 {processedProducts.length} 款商品全部可編輯）
+                    </span>
+                  </div>
+
+                  {adminTablePageSize > 0 && adminTotalPages > 1 && (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setAdminTableCurrentPage(prev => Math.max(1, prev - 1))}
+                        disabled={adminTableCurrentPage === 1}
+                        className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed font-bold cursor-pointer text-xs"
+                      >
+                        上一頁
+                      </button>
+                      <span className="px-2 font-mono font-bold text-slate-700 text-xs">
+                        第 {adminTableCurrentPage} / {adminTotalPages} 頁
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setAdminTableCurrentPage(prev => Math.min(adminTotalPages, prev + 1))}
+                        disabled={adminTableCurrentPage === adminTotalPages}
+                        className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-40 disabled:cursor-not-allowed font-bold cursor-pointer text-xs"
+                      >
+                        下一頁
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 {/* Floating Batch Action Bar when table items selected */}
                 {tableSelectedProductIds.length > 0 && (
@@ -4765,7 +5262,7 @@ export default function App() {
 
                       {topCategories.map(parentCat => {
                         const count = products.filter(p => {
-                          const rawCat = p.extraAttributes["Categories"] || "";
+                          const rawCat = p.extraAttributes?.["Categories"] || "";
                           return (rawCat.split("/")[0]?.trim() || "Other") === parentCat;
                         }).length;
 
@@ -4806,7 +5303,7 @@ export default function App() {
                   </button>
                   {categoryStructure[selectedParentCategory].map(sub => {
                     const subCount = products.filter(p => {
-                      const rawCat = p.extraAttributes["Categories"] || "";
+                      const rawCat = p.extraAttributes?.["Categories"] || "";
                       const parent = rawCat.split("/")[0]?.trim() || "Other";
                       const currentSub = rawCat.split("/").slice(1).join(" / ")?.trim() || "General";
                       return parent === selectedParentCategory && currentSub === sub;
@@ -5206,7 +5703,7 @@ export default function App() {
                         <ProductImage
                           id={product.id}
                           name={product.name}
-                          fallbackUrl={product.extraAttributes["Image URLs"]}
+                          fallbackUrl={product.extraAttributes?.["Image URLs"]}
                           isOutOfStock={!product.hasStock}
                           version={imageVersion}
                         />
@@ -5653,7 +6150,7 @@ export default function App() {
                   <ProductImage
                     id={selectedProduct.id}
                     name={selectedProduct.name}
-                    fallbackUrl={selectedProduct.extraAttributes["Image URLs"]}
+                    fallbackUrl={selectedProduct.extraAttributes?.["Image URLs"]}
                     isOutOfStock={!selectedProduct.hasStock}
                     version={imageVersion}
                   />
@@ -5687,9 +6184,9 @@ export default function App() {
                       <h2 className="text-slate-900 font-black text-lg md:text-xl leading-snug">
                         {selectedProduct.name}
                       </h2>
-                      {selectedProduct.extraAttributes["Categories"] && (
+                      {selectedProduct.extraAttributes?.["Categories"] && (
                         <div className="inline-flex mt-1.5 flex-wrap gap-2">
-                          {selectedProduct.extraAttributes["Categories"].split("/").map((tc, key) => (
+                          {(selectedProduct.extraAttributes?.["Categories"] || "").split("/").map((tc, key) => (
                             <span key={key} className="text-xs px-2.5 py-0.5 bg-indigo-50 border border-indigo-100 text-indigo-700 font-bold rounded-md">
                               {tc.trim()}
                             </span>
@@ -5717,9 +6214,9 @@ export default function App() {
                           )}
                         </span>
                       </div>
-                      {parseFloat(selectedProduct.price) > 0 && selectedProduct.extraAttributes["Discounted Price"] && (
+                      {parseFloat(selectedProduct.price) > 0 && selectedProduct.extraAttributes?.["Discounted Price"] && (
                         <div className="text-right text-xs">
-                          <span className="text-slate-400 line-through">HK${parseFloat(selectedProduct.extraAttributes["Discounted Price"]).toFixed(2)}</span>
+                          <span className="text-slate-400 line-through">HK${parseFloat(selectedProduct.extraAttributes?.["Discounted Price"] || "0").toFixed(2)}</span>
                           <span className="block text-emerald-600 font-bold">特別推廣優惠</span>
                         </div>
                       )}
@@ -5731,13 +6228,13 @@ export default function App() {
                       <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50/50 p-3 rounded-2xl border border-slate-100 leading-normal">
                         <div>
                           <span className="text-slate-400 block font-medium">SKU 編號：</span>
-                          <span className="text-slate-700 font-semibold">{selectedProduct.extraAttributes["SKU"] || "無"}</span>
+                          <span className="text-slate-700 font-semibold">{selectedProduct.extraAttributes?.["SKU"] || "無"}</span>
                         </div>
                         <div>
                           <span className="text-slate-400 block font-medium">發布狀態：</span>
                           <span className="text-slate-700 font-semibold flex items-center gap-1.5">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                            {selectedProduct.extraAttributes["Publish Status"] || "已發布"}
+                            {selectedProduct.extraAttributes?.["Publish Status"] || "已發布"}
                           </span>
                         </div>
                         <div>
@@ -5763,16 +6260,16 @@ export default function App() {
                             );
                           })()}
                         </div>
-                        {selectedProduct.extraAttributes["Weight (kg)"] && (
+                        {selectedProduct.extraAttributes?.["Weight (kg)"] && (
                           <div>
                             <span className="text-slate-400 block font-medium">商品重量：</span>
-                            <span className="text-slate-700 font-semibold">{selectedProduct.extraAttributes["Weight (kg)"]} kg</span>
+                            <span className="text-slate-700 font-semibold">{selectedProduct.extraAttributes?.["Weight (kg)"]} kg</span>
                           </div>
                         )}
-                        {selectedProduct.extraAttributes["Hashtags"] && (
+                        {selectedProduct.extraAttributes?.["Hashtags"] && (
                           <div className="col-span-2">
                             <span className="text-slate-400 block font-medium">標籤關鍵字：</span>
-                            <span className="text-indigo-600 font-medium">{selectedProduct.extraAttributes["Hashtags"]}</span>
+                            <span className="text-indigo-600 font-medium">{selectedProduct.extraAttributes?.["Hashtags"]}</span>
                           </div>
                         )}
                         {getProductColMCategories(selectedProduct) && (
@@ -5799,13 +6296,14 @@ export default function App() {
                       <ShoppingCart className="w-4 h-4" />
                       加入詢價單
                     </button>
-                    {viewMode === "admin" && (
+                    {isAuthenticated && (
                       <button
-                        onClick={handleStartEditing}
-                        className="py-3 px-4 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-705 hover:bg-indigo-100 font-bold transition-all text-xs flex items-center gap-1.5 cursor-pointer"
+                        onClick={() => handleStartEditing()}
+                        className="py-3 px-4 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold transition-all text-xs flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                        title="編輯此商品屬性、價格、庫存與Col M備註"
                       >
                         <Edit className="w-4 h-4 text-indigo-600" />
-                        編輯
+                        編輯商品
                       </button>
                     )}
                     <button
@@ -5888,7 +6386,7 @@ export default function App() {
                           <ProductImage
                             id={item.product.id}
                             name={item.product.name}
-                            fallbackUrl={item.product.extraAttributes["Image URLs"]}
+                            fallbackUrl={item.product.extraAttributes?.["Image URLs"]}
                             isOutOfStock={!item.product.hasStock}
                             version={imageVersion}
                           />
@@ -8390,6 +8888,638 @@ function revertStockForOrders(orderIdsMap) {
         </div>
       )}
 
+      {/* Sales Promotion Modal (銷售訊息) */}
+      {isSalesPromoOpen && (
+        <div 
+          className="fixed inset-0 bg-slate-950/65 backdrop-blur-xs z-50 flex items-center justify-center p-2 sm:p-4 transition-all animate-fadeIn"
+          onClick={() => {
+            if (!isSavingPromo && !isGeneratingPromoPdf) setIsSalesPromoOpen(false);
+          }}
+        >
+          <div 
+            className="bg-white rounded-2xl sm:rounded-3xl max-w-4xl w-full max-h-[95vh] overflow-hidden shadow-2xl relative border border-slate-100 flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/80 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-100 flex items-center justify-center text-rose-600 shrink-0 shadow-xs">
+                  <Tag className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-slate-950 font-black text-sm md:text-base">
+                      銷售訊息 • 商品限期特價促銷
+                    </h3>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
+                      自動同步 Col O (Price)
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    在指定日期區間內特價生效並同步至 Google Sheet raw 分頁 Col O，促銷結束後自動還原原價
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="flex bg-slate-200/80 p-0.5 rounded-xl text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setPromoModalTab("create")}
+                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                      promoModalTab === "create"
+                        ? "bg-white text-slate-900 shadow-xs"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    建立特價清單
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fetchSavedPromotions();
+                      setPromoModalTab("history");
+                    }}
+                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                      promoModalTab === "history"
+                        ? "bg-white text-slate-900 shadow-xs"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    <span>促銷記錄</span>
+                    {savedPromotions.length > 0 && (
+                      <span className="w-4 h-4 rounded-full bg-rose-600 text-white text-[9px] flex items-center justify-center font-bold">
+                        {savedPromotions.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                <button 
+                  type="button"
+                  onClick={() => setIsSalesPromoOpen(false)}
+                  disabled={isSavingPromo || isGeneratingPromoPdf}
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+              {promoModalTab === "create" ? (
+                <>
+                  {/* Step 1: Day Range Selector (促銷日期區間) */}
+                  <div className="bg-slate-50/80 rounded-2xl p-4 border border-slate-200/80 space-y-3">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Calendar className="w-4 h-4 text-rose-600 shrink-0" />
+                        <h4 className="font-extrabold text-xs sm:text-sm text-slate-900">
+                          1. 選擇促銷日期區間 (Day Range)
+                        </h4>
+                      </div>
+                      <div className="text-[11px] font-mono font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-100">
+                        區間：{formatPromoDate(promoStartDate)} 至 {formatPromoDate(promoEndDate)}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          開始日期 (Start Date):
+                        </label>
+                        <input
+                          type="date"
+                          value={promoStartDate}
+                          onChange={(e) => setPromoStartDate(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white font-mono text-xs focus:ring-2 focus:ring-rose-500 focus:outline-hidden"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          結束日期 (End Date):
+                        </label>
+                        <input
+                          type="date"
+                          value={promoEndDate}
+                          onChange={(e) => setPromoEndDate(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white font-mono text-xs focus:ring-2 focus:ring-rose-500 focus:outline-hidden"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Quick presets buttons */}
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      <span className="text-[10px] font-bold text-slate-400">快速設定:</span>
+                      {[
+                        { label: "今天起 3 天", days: 3 },
+                        { label: "一週特賣 (7天)", days: 7 },
+                        { label: "週末促銷 (2天)", days: 2 },
+                        { label: "雙週促銷 (14天)", days: 14 },
+                        { label: "當月特賣 (30天)", days: 30 },
+                      ].map((preset) => (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          onClick={() => {
+                            const today = new Date();
+                            const end = new Date();
+                            end.setDate(today.getDate() + preset.days);
+                            setPromoStartDate(today.toISOString().slice(0, 10));
+                            setPromoEndDate(end.toISOString().slice(0, 10));
+                          }}
+                          className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300 text-slate-600 border border-slate-200 transition-colors cursor-pointer"
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Real-time status indicator notice */}
+                    {(() => {
+                      const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(new Date());
+                      const isTodayInRange = promoStartDate <= todayStr && todayStr <= promoEndDate;
+                      const isPast = todayStr > promoEndDate;
+                      if (isTodayInRange) {
+                        return (
+                          <div className="flex items-center gap-2 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold animate-fadeIn">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>
+                              ⚡ 促銷期間包含今日 ({formatPromoDate(todayStr)})！儲存完成後，特價將<strong>立即寫入 Google Sheet raw 分頁 Col O (Price)</strong>，過期後自動還原！
+                            </span>
+                          </div>
+                        );
+                      } else if (isPast) {
+                        return (
+                          <div className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold animate-fadeIn">
+                            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span>⚠️ 所選日期已過期，請選擇包含今天或未來的日期區間。</span>
+                          </div>
+                        );
+                      } else {
+                        return (
+                          <div className="flex items-center gap-2 p-2.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-[11px] font-bold animate-fadeIn">
+                            <Clock className="w-4 h-4 text-blue-600 shrink-0" />
+                            <span>
+                              🕒 排程促銷：將於促銷首日 ({formatPromoDate(promoStartDate)}) 自動生效寫入 Col O (Price)，結束後自動還原原價。
+                            </span>
+                          </div>
+                        );
+                      }
+                    })()}
+                  </div>
+
+                  {/* Step 2: Product Name Search Bar & Multi-Select */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Search className="w-4 h-4 text-indigo-600 shrink-0" />
+                        <h4 className="font-extrabold text-xs sm:text-sm text-slate-900">
+                          2. 搜尋並選取商品（可多選）
+                        </h4>
+                      </div>
+                      <span className="text-[11px] text-slate-400">
+                        輸入關鍵字多選加入特價清單
+                      </span>
+                    </div>
+
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="輸入商品名稱關鍵字搜尋（例如：奶粉、面膜、油、牙膏）..."
+                        value={promoSearchQuery}
+                        onChange={(e) => setPromoSearchQuery(e.target.value)}
+                        className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-rose-500 focus:outline-hidden text-xs"
+                      />
+                      {promoSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setPromoSearchQuery("")}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Search results picker box */}
+                    {promoSearchQuery.trim() !== "" && (
+                      <div className="border border-slate-200 rounded-2xl bg-white overflow-hidden shadow-xs">
+                        <div className="p-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-xs">
+                          <span className="font-bold text-slate-600 text-[11px]">
+                            符合「{promoSearchQuery}」的商品：共 {promoSearchResults.length} 款
+                          </span>
+                          {promoSearchResults.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={handleSelectAllPromoResults}
+                              className="text-[11px] font-extrabold text-rose-600 hover:text-rose-800 cursor-pointer underline"
+                            >
+                              ＋全選加入清單
+                            </button>
+                          )}
+                        </div>
+
+                        {promoSearchResults.length === 0 ? (
+                          <div className="p-6 text-center text-xs text-slate-400">
+                            沒有找到符合「{promoSearchQuery}」的商品，請嘗試不同關鍵字。
+                          </div>
+                        ) : (
+                          <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
+                            {promoSearchResults.map((prod) => {
+                              const isSelected = selectedPromoItems.some((it) => it.id === prod.id);
+                              return (
+                                <div
+                                  key={prod.id}
+                                  onClick={() => handleTogglePromoItem(prod)}
+                                  className={`p-2.5 flex items-center justify-between gap-3 hover:bg-rose-50/40 transition-colors cursor-pointer ${
+                                    isSelected ? "bg-rose-50/70" : ""
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <input
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      onChange={() => {}} // handled by parent onClick
+                                      className="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 accent-rose-600 cursor-pointer shrink-0"
+                                    />
+                                    <div className="w-8 h-8 rounded-lg bg-slate-100 overflow-hidden shrink-0 border border-slate-200/60">
+                                      <ProductImage
+                                        id={prod.id}
+                                        name={prod.name}
+                                        fallbackUrl={prod.extraAttributes?.["Image URLs"]}
+                                        version={imageVersion}
+                                        className="w-full h-full object-cover"
+                                      />
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="text-xs font-bold text-slate-800 truncate">
+                                        {prod.costName || prod.name}
+                                      </div>
+                                      <div className="text-[10px] text-slate-400 font-mono">
+                                        ID: {prod.id} • 原售價: HK${parseFloat(getProductPrice(prod)).toFixed(2)}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="shrink-0 flex items-center gap-2">
+                                    {isSelected ? (
+                                      <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                                        ✓ 已加入
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] font-bold text-slate-500 hover:text-rose-600 bg-white border border-slate-200 px-2 py-0.5 rounded-lg shadow-2xs">
+                                        ＋加入
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Step 3: The 2-Column List (Name & Editable Price) */}
+                  <div className="space-y-3">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Tag className="w-4 h-4 text-rose-600 shrink-0" />
+                        <h4 className="font-extrabold text-xs sm:text-sm text-slate-900">
+                          3. 促銷商品特價清單 (僅 2 欄位：商品名稱 與 售價)
+                        </h4>
+                      </div>
+                      <span className="text-xs font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-100">
+                        已選取 {selectedPromoItems.length} 款特價商品
+                      </span>
+                    </div>
+
+                    {/* Batch Discount Toolbar */}
+                    {selectedPromoItems.length > 0 && (
+                      <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-[11px] font-bold text-slate-500">批次特價計算:</span>
+                          <button
+                            type="button"
+                            onClick={() => handleBatchDiscount(0.9)}
+                            className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
+                            title="所有特價商品打 9 折"
+                          >
+                            9折
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleBatchDiscount(0.85)}
+                            className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
+                            title="所有特價商品打 85 折"
+                          >
+                            85折
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleBatchDiscount(0.8)}
+                            className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
+                            title="所有特價商品打 8 折"
+                          >
+                            8折
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleBatchDeduct(10)}
+                            className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
+                            title="每件商品原價減 HK$10"
+                          >
+                            減 HK$10
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleBatchDeduct(20)}
+                            className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
+                            title="每件商品原價減 HK$20"
+                          >
+                            減 HK$20
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPromoItems([])}
+                          className="text-[11px] font-bold text-slate-400 hover:text-rose-600 transition-colors cursor-pointer underline"
+                        >
+                          清空清單
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Exact 2-Column Table */}
+                    <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-xs">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-900 text-white font-extrabold text-[11px] uppercase tracking-wider">
+                          <tr>
+                            <th className="px-4 py-3">欄位 1: 商品名稱 (Name)</th>
+                            <th className="px-4 py-3 text-right w-44">欄位 2: 售價 (Price)</th>
+                            <th className="w-12 px-2 py-3 text-center">操作</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {selectedPromoItems.length === 0 ? (
+                            <tr>
+                              <td colSpan={3} className="px-4 py-12 text-center text-slate-400 italic">
+                                目前尚未選取任何促銷商品。請在上方搜尋商品名稱加入清單。
+                              </td>
+                            </tr>
+                          ) : (
+                            selectedPromoItems.map((item, index) => (
+                              <tr key={item.id} className="hover:bg-slate-50/60 transition-colors">
+                                {/* Column 1: Name */}
+                                <td className="px-4 py-3">
+                                  <div className="font-bold text-slate-900 text-xs sm:text-sm line-clamp-2">
+                                    {item.name}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                    原售價: HK${parseFloat(item.originalPrice).toFixed(2)} • SKU: {item.id}
+                                  </div>
+                                </td>
+
+                                {/* Column 2: Editable Price */}
+                                <td className="px-4 py-3 text-right">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    <span className="text-xs font-bold text-slate-400 font-mono">HK$</span>
+                                    <input
+                                      type="number"
+                                      step="0.1"
+                                      min="0"
+                                      value={item.price}
+                                      onChange={(e) => handleUpdatePromoItemPrice(item.id, e.target.value)}
+                                      className="w-28 px-2.5 py-1.5 text-right font-black text-rose-700 bg-rose-50/60 border border-rose-300 focus:bg-white focus:border-rose-600 focus:ring-2 focus:ring-rose-200 rounded-lg text-xs sm:text-sm font-mono shadow-2xs"
+                                      title="點擊直接修改特價售價"
+                                    />
+                                  </div>
+                                </td>
+
+                                {/* Action */}
+                                <td className="px-2 py-3 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemovePromoItem(item.id)}
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                    title="從清單移除"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                /* Tab 2: History & Active Campaigns */
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-black text-slate-900 text-sm">
+                        所有促銷訊息記錄 (Promotions History)
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        查看歷史促銷設定，或隨時手動提前還原原價
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={fetchSavedPromotions}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold flex items-center gap-1.5 text-slate-700 cursor-pointer shadow-2xs"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${loadingPromotions ? "animate-spin" : ""}`} />
+                      <span>重新整理</span>
+                    </button>
+                  </div>
+
+                  {savedPromotions.length === 0 ? (
+                    <div className="p-12 text-center text-slate-400 border border-dashed border-slate-200 rounded-2xl">
+                      目前沒有任何歷史促銷記錄。點擊上方「建立特價清單」發布第一個促銷！
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {savedPromotions.map((camp: any) => {
+                        const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(new Date());
+                        const isActive = camp.status === "active";
+                        const isReverted = camp.status === "reverted";
+                        const isExpired = camp.status === "expired";
+                        const isScheduled = camp.status === "scheduled";
+
+                        return (
+                          <div
+                            key={camp.id}
+                            className={`p-4 rounded-2xl border transition-all ${
+                              isActive
+                                ? "bg-rose-50/40 border-rose-200 shadow-xs"
+                                : isReverted
+                                ? "bg-slate-50/60 border-slate-200 opacity-80"
+                                : "bg-white border-slate-200"
+                            }`}
+                          >
+                            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full ${
+                                  isActive
+                                    ? "bg-rose-600 text-white animate-pulse"
+                                    : isScheduled
+                                    ? "bg-blue-100 text-blue-800"
+                                    : isReverted
+                                    ? "bg-slate-200 text-slate-600"
+                                    : "bg-amber-100 text-amber-800"
+                                }`}>
+                                  {isActive ? "⚡ 進行中 (已寫入 Col O)" : isScheduled ? "🕒 排程中" : isReverted ? "↩ 已手動還原" : "✓ 已結束還原"}
+                                </span>
+                                <span className="font-mono text-xs font-bold text-slate-700">
+                                  {formatPromoDate(camp.startDate)} 至 {formatPromoDate(camp.endDate)}
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleGeneratePromoPdf(camp.items.map((it: any) => ({
+                                    id: it.productId,
+                                    name: it.productName,
+                                    price: it.promoPrice,
+                                    originalPrice: it.originalPrice
+                                  })), camp.startDate, camp.endDate)}
+                                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1 cursor-pointer shadow-2xs"
+                                >
+                                  <FileText className="w-3.5 h-3.5 text-rose-600" />
+                                  <span>匯出 PDF</span>
+                                </button>
+
+                                {isActive && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRevertPromotion(camp.id)}
+                                    className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold cursor-pointer shadow-2xs"
+                                    title="手動提前結束促銷並恢復 Google Sheet 原價"
+                                  >
+                                    提前還原原價
+                                  </button>
+                                )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeletePromotion(camp.id)}
+                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                                  title="刪除此記錄"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="pt-3">
+                              <div className="text-[11px] font-bold text-slate-500 mb-2">
+                                促銷商品清單（共 {camp.items?.length || 0} 款）：
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto">
+                                {(camp.items || []).map((it: any) => (
+                                  <div key={it.productId} className="flex items-center justify-between p-2 rounded-xl bg-white border border-slate-100 text-xs">
+                                    <span className="font-bold text-slate-800 truncate max-w-[200px]" title={it.productName}>
+                                      {it.productName}
+                                    </span>
+                                    <div className="flex items-center gap-2 font-mono shrink-0">
+                                      <span className="text-slate-400 line-through text-[10px]">
+                                        HK${parseFloat(it.originalPrice).toFixed(2)}
+                                      </span>
+                                      <span className="font-black text-rose-700">
+                                        HK${parseFloat(it.promoPrice).toFixed(2)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Footer with Actions */}
+            <div className="p-4 sm:p-5 border-t border-slate-100 bg-slate-50/80 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+              <div className="text-xs text-slate-500">
+                {promoModalTab === "create" ? (
+                  <span>
+                    已選取 <strong>{selectedPromoItems.length}</strong> 款商品 • 有效期：
+                    <strong className="text-rose-700 ml-1">{formatPromoDate(promoStartDate)} 至 {formatPromoDate(promoEndDate)}</strong>
+                  </span>
+                ) : (
+                  <span>共 {savedPromotions.length} 筆促銷記錄</span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsSalesPromoOpen(false)}
+                  disabled={isSavingPromo || isGeneratingPromoPdf}
+                  className="py-2 px-4 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 font-bold transition-all text-xs cursor-pointer"
+                >
+                  關閉
+                </button>
+
+                {promoModalTab === "create" && (
+                  <>
+                    {/* Export Simple PDF button */}
+                    <button
+                      type="button"
+                      onClick={() => handleGeneratePromoPdf()}
+                      disabled={isGeneratingPromoPdf || selectedPromoItems.length === 0}
+                      className="py-2 px-4 rounded-xl border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 font-extrabold transition-all text-xs shadow-2xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      title="匯出僅有商品名稱、售價及日期區間的簡易特價單 PDF"
+                    >
+                      {isGeneratingPromoPdf ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <FileText className="w-3.5 h-3.5 text-rose-600" />
+                      )}
+                      <span>{isGeneratingPromoPdf ? "匯出中..." : "匯出簡易 PDF"}</span>
+                    </button>
+
+                    {/* Finish & Save Promotion button */}
+                    <button
+                      type="button"
+                      onClick={handleSavePromotion}
+                      disabled={isSavingPromo || selectedPromoItems.length === 0}
+                      className="py-2 px-5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold transition-all text-xs shadow-md shadow-rose-200 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isSavingPromo ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>正在儲存同步中...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-4 h-4" />
+                          <span>完成儲存銷售訊息 ({selectedPromoItems.length})</span>
+                        </>
+                      )}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Floating Cost Category Dock at bottom center (floating buttons from Col F of Cost tab) */}
       {viewMode === "customer" && Object.keys(costCategories.symbolToName || {}).length > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-white/95 backdrop-blur-md border border-slate-200 shadow-xl p-3 rounded-2xl w-[92vw] sm:w-[500px] animate-slideUp">
@@ -8746,7 +9876,7 @@ function revertStockForOrders(orderIdsMap) {
 
                     <div className="grid grid-cols-4 gap-3">
                       {productsByCategory[catName].map(p => {
-                        const hasCategoryLabel = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].trim() !== "";
+                        const hasCategoryLabel = Boolean(p.extraAttributes?.["Categories"]?.trim());
                         const priceVal = parseFloat(getProductPrice(p));
                         return (
                           <div
@@ -8847,7 +9977,7 @@ function revertStockForOrders(orderIdsMap) {
 
             <div className="grid grid-cols-4 gap-3">
               {productsByCategory[catName].map(p => {
-                const hasCategoryLabel = p.extraAttributes?.["Categories"] && p.extraAttributes["Categories"].trim() !== "";
+                const hasCategoryLabel = Boolean(p.extraAttributes?.["Categories"]?.trim());
                 const priceVal = parseFloat(getProductPrice(p));
                 return (
                   <div

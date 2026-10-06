@@ -678,11 +678,290 @@ async function triggerSheetsSync(
   }
 }
 
+// Sales Promotion Campaign persistence (銷售訊息)
+const PROMOTIONS_FILE = path.join(process.cwd(), "promotions_backup.json");
+
+export interface PromoCampaignItem {
+  productId: string;
+  productName: string;
+  originalPrice: string;
+  promoPrice: string;
+  applied: boolean;
+}
+
+export interface SalesPromotionCampaign {
+  id: string;
+  startDate: string; // "YYYY-MM-DD"
+  endDate: string;   // "YYYY-MM-DD"
+  createdAt: string;
+  items: PromoCampaignItem[];
+  status: "active" | "scheduled" | "expired" | "reverted";
+}
+
+function getSalesPromotions(): SalesPromotionCampaign[] {
+  try {
+    if (fs.existsSync(PROMOTIONS_FILE)) {
+      return JSON.parse(fs.readFileSync(PROMOTIONS_FILE, "utf-8"));
+    }
+  } catch (error) {
+    console.error("Failed to read promotions file:", error);
+  }
+  return [];
+}
+
+function saveSalesPromotions(campaigns: SalesPromotionCampaign[]) {
+  try {
+    fs.writeFileSync(PROMOTIONS_FILE, JSON.stringify(campaigns, null, 2));
+  } catch (error) {
+    console.error("Failed to save promotions file:", error);
+  }
+}
+
+function updateSingleProductPrice(productId: string, productName: string, newPrice: string, localProductsList: any[]) {
+  const pIdx = localProductsList.findIndex((p: any) => p.id === productId);
+  if (pIdx !== -1) {
+    localProductsList[pIdx].price = newPrice;
+    if (localProductsList[pIdx].allValues) {
+      while (localProductsList[pIdx].allValues.length < 33) {
+        localProductsList[pIdx].allValues.push("");
+      }
+      localProductsList[pIdx].allValues[14] = newPrice; // Col O (Price)
+    }
+  } else {
+    let sheetProduct = productsCache.find((p: any) => p.id === productId);
+    if (!sheetProduct && fs.existsSync("products_backup.json")) {
+      try {
+        const backup = JSON.parse(fs.readFileSync("products_backup.json", "utf-8"));
+        sheetProduct = backup.find((p: any) => p.id === productId);
+      } catch (e) {}
+    }
+    const allVals = [...(sheetProduct?.allValues || [])];
+    while (allVals.length < 33) {
+      allVals.push("");
+    }
+    allVals[1] = productId;
+    allVals[2] = productName || sheetProduct?.name || "";
+    allVals[14] = newPrice;
+    const newProd = {
+      ...(sheetProduct || {}),
+      id: productId,
+      name: productName || sheetProduct?.name || "",
+      price: newPrice,
+      extraAttributes: {
+        ...(sheetProduct?.extraAttributes || {}),
+        "Categories": (sheetProduct?.extraAttributes?.["Categories"]) || "",
+        "show on pdf": (sheetProduct?.extraAttributes?.["show on pdf"]) || "0"
+      },
+      allValues: allVals
+    };
+    localProductsList.unshift(newProd);
+  }
+
+  // Also update in-memory cache if present
+  const cIdx = productsCache.findIndex((p: any) => p.id === productId);
+  if (cIdx !== -1) {
+    productsCache[cIdx].price = newPrice;
+    if (productsCache[cIdx].allValues) {
+      while (productsCache[cIdx].allValues.length < 33) {
+        productsCache[cIdx].allValues.push("");
+      }
+      productsCache[cIdx].allValues[14] = newPrice;
+    }
+  }
+
+  // Trigger Google Sheet sync for Col O ('Price')
+  triggerSheetsSync(
+    productId,
+    productName,
+    newPrice,
+    "",
+    "",
+    "updateProduct"
+  );
+}
+
+function checkAndApplyPromotions() {
+  const campaigns = getSalesPromotions();
+  if (campaigns.length === 0) return;
+
+  const now = new Date();
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(now);
+  let hasChanges = false;
+  let localProducts = getLocalProducts();
+
+  for (const camp of campaigns) {
+    if (camp.status === "reverted") continue;
+
+    const isWithinRange = camp.startDate <= todayStr && todayStr <= camp.endDate;
+    const isPastRange = todayStr > camp.endDate;
+
+    if (isWithinRange) {
+      camp.status = "active";
+      for (const item of camp.items) {
+        if (!item.applied) {
+          const priceStr = String(item.promoPrice);
+          updateSingleProductPrice(item.productId, item.productName, priceStr, localProducts);
+          item.applied = true;
+          hasChanges = true;
+          console.log(`[Sales Promo Applied]: ${item.productName} (${item.productId}) price set to ${priceStr}`);
+        }
+      }
+    } else if (isPastRange) {
+      camp.status = "expired";
+      for (const item of camp.items) {
+        if (item.applied) {
+          const origPriceStr = String(item.originalPrice);
+          updateSingleProductPrice(item.productId, item.productName, origPriceStr, localProducts);
+          item.applied = false;
+          hasChanges = true;
+          console.log(`[Sales Promo Reverted]: ${item.productName} (${item.productId}) price reverted to ${origPriceStr}`);
+        }
+      }
+    } else {
+      camp.status = "scheduled";
+    }
+  }
+
+  if (hasChanges) {
+    saveSalesPromotions(campaigns);
+    saveLocalProducts(localProducts);
+  }
+}
+
+// Initial check on boot and every 5 minutes automatic lifecycle check
+try {
+  checkAndApplyPromotions();
+} catch (e) {
+  console.warn("Initial checkAndApplyPromotions error:", e);
+}
+setInterval(() => {
+  try {
+    checkAndApplyPromotions();
+  } catch (err) {
+    console.warn("Periodic checkAndApplyPromotions error:", err);
+  }
+}, 5 * 60 * 1000);
+
 // API Routes
 app.use(express.json({ limit: "100mb" }));
 
 app.get("/api/sheet-settings", (req, res) => {
   res.json(getSheetSettings());
+});
+
+app.get("/api/sales-promotions", (req, res) => {
+  try {
+    checkAndApplyPromotions();
+    res.json(getSalesPromotions());
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/sales-promotions", (req, res) => {
+  try {
+    const { startDate, endDate, items } = req.body;
+    if (!startDate || !endDate || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "Missing startDate, endDate, or items" });
+    }
+
+    const campaigns = getSalesPromotions();
+    const now = new Date();
+    const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(now);
+    const isWithinRange = startDate <= todayStr && todayStr <= endDate;
+    let localProducts = getLocalProducts();
+
+    const campaignItems: PromoCampaignItem[] = items.map((it: any) => {
+      let currentPrice = it.originalPrice;
+      if (!currentPrice) {
+        const p = localProducts.find((p: any) => p.id === it.productId) || productsCache.find((p: any) => p.id === it.productId);
+        currentPrice = p?.price || "0";
+      }
+      return {
+        productId: it.productId,
+        productName: it.productName,
+        originalPrice: String(currentPrice),
+        promoPrice: String(it.promoPrice || it.price),
+        applied: false
+      };
+    });
+
+    const newCampaign: SalesPromotionCampaign = {
+      id: `promo-${Date.now()}`,
+      startDate,
+      endDate,
+      createdAt: now.toISOString(),
+      items: campaignItems,
+      status: isWithinRange ? "active" : (todayStr > endDate ? "expired" : "scheduled")
+    };
+
+    if (isWithinRange) {
+      for (const it of newCampaign.items) {
+        updateSingleProductPrice(it.productId, it.productName, it.promoPrice, localProducts);
+        it.applied = true;
+        console.log(`[Sales Promo Applied immediately]: ${it.productName} -> ${it.promoPrice}`);
+      }
+      saveLocalProducts(localProducts);
+    }
+
+    campaigns.unshift(newCampaign);
+    saveSalesPromotions(campaigns);
+
+    res.json({ success: true, campaign: newCampaign, appliedNow: isWithinRange });
+  } catch (error: any) {
+    console.error("Error creating sales promotion:", error);
+    res.status(500).json({ error: error.message || "Failed to create sales promotion" });
+  }
+});
+
+app.post("/api/sales-promotions/:id/revert", (req, res) => {
+  try {
+    const { id } = req.params;
+    const campaigns = getSalesPromotions();
+    const camp = campaigns.find(c => c.id === id);
+    if (!camp) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    let localProducts = getLocalProducts();
+    for (const it of camp.items) {
+      if (it.applied) {
+        updateSingleProductPrice(it.productId, it.productName, it.originalPrice, localProducts);
+        it.applied = false;
+        console.log(`[Sales Promo Manually Reverted]: ${it.productName} -> ${it.originalPrice}`);
+      }
+    }
+    camp.status = "reverted";
+    saveLocalProducts(localProducts);
+    saveSalesPromotions(campaigns);
+
+    res.json({ success: true, campaign: camp });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/sales-promotions/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    let campaigns = getSalesPromotions();
+    const camp = campaigns.find(c => c.id === id);
+    if (camp) {
+      let localProducts = getLocalProducts();
+      for (const it of camp.items) {
+        if (it.applied) {
+          updateSingleProductPrice(it.productId, it.productName, it.originalPrice, localProducts);
+          it.applied = false;
+        }
+      }
+      saveLocalProducts(localProducts);
+    }
+    campaigns = campaigns.filter(c => c.id !== id);
+    saveSalesPromotions(campaigns);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.get("/api/purchases", (req, res) => {
@@ -1553,7 +1832,7 @@ app.put("/api/products/:id", (req, res) => {
         alwaysStock,
         secondaryStockCount,
         extraAttributes: {
-          ...localProducts[existingIndex].extraAttributes,
+          ...(localProducts[existingIndex]?.extraAttributes || {}),
           ...(finalRemarks !== undefined ? { "Categories": finalRemarks, "Categories/分類": finalRemarks, "Merchant Remark": finalRemarks, "remarks": finalRemarks } : {}),
           ...(showOnPdfVal !== undefined ? { "show on pdf": showOnPdfVal } : {})
         },
@@ -2174,6 +2453,11 @@ app.get("/api/sold-data", async (req, res) => {
 
 app.get("/api/products", async (req, res) => {
   try {
+    try {
+      checkAndApplyPromotions();
+    } catch (e) {
+      console.warn("Failed checking promotions on /api/products:", e);
+    }
     const forceRefresh = req.query.refresh === "true";
     if (forceRefresh) {
       lastFetchTime = 0; // invalidate memory sheet cache duration lookup
@@ -2226,6 +2510,7 @@ app.get("/api/products", async (req, res) => {
 
       return {
         ...p,
+        extraAttributes: p.extraAttributes || {},
         costCategorySymbol: symbol,
         costCategoryName: name,
         costName: costName
