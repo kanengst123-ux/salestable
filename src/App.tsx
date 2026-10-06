@@ -7420,17 +7420,28 @@ function doPost(e) {
       var remarks = param.remarks;
       var username = param.username || "System";
       
-      // Look if the product already exists in 'raw' by checking name or ID
+      // Look if the product already exists in 'raw' by checking SKU/ID first, then Name
       var data = sheet.getDataRange().getValues();
       var foundIndex = -1;
-      for (var i = 1; i < data.length; i++) {
-        var rowName = (data[i][2] || "").toString().trim();
-        var rowId = (data[i][1] || "").toString().trim(); // Col B (SKU / ID)
-        var rowIdColD = (data[i][3] || "").toString().trim(); // Col D
-        if ((name && rowName === name.toString().trim()) || 
-            (id && (rowId === id.toString().trim() || rowIdColD === id.toString().trim()))) {
-          foundIndex = i;
-          break;
+      if (id) {
+        var cleanId = id.toString().trim();
+        for (var i = 1; i < data.length; i++) {
+          var rowId = (data[i][1] || "").toString().trim(); // Col B (SKU / ID)
+          var rowIdColD = (data[i][3] || "").toString().trim(); // Col D
+          if (rowId === cleanId || rowIdColD === cleanId) {
+            foundIndex = i;
+            break;
+          }
+        }
+      }
+      if (foundIndex === -1 && name) {
+        var cleanName = name.toString().trim();
+        for (var i = 1; i < data.length; i++) {
+          var rowName = (data[i][2] || "").toString().trim();
+          if (rowName === cleanName) {
+            foundIndex = i;
+            break;
+          }
         }
       }
       
@@ -7457,8 +7468,8 @@ function doPost(e) {
           sheet.getRange(1, 32).setValue("list");
         }
       } else {
-        sheet.getRange(rowToUpdate, 2).setValue(id || "");
-        sheet.getRange(rowToUpdate, 3).setValue(name || "");
+        if (id) sheet.getRange(rowToUpdate, 2).setValue(id);
+        if (name) sheet.getRange(rowToUpdate, 3).setValue(name);
       }
       
       // Sync to Cost tab if categorySymbol is provided
@@ -7499,46 +7510,66 @@ function doPost(e) {
       var pA = safeParsePrice(priceA);
       if (!isNaN(pA)) {
         sheet.getRange(rowToUpdate, 18).setValue(pA); // Col R: A 價 (Gold Price)
-      } else if (!isNaN(pNum)) {
+      } else if (!isNaN(pNum) && foundIndex === -1) {
         sheet.getRange(rowToUpdate, 18).setValue(pNum);
       }
 
       var pB = safeParsePrice(priceB);
       if (!isNaN(pB)) {
         sheet.getRange(rowToUpdate, 19).setValue(pB); // Col S: B 價 (Silver Price)
-      } else if (!isNaN(pNum)) {
+      } else if (!isNaN(pNum) && foundIndex === -1) {
         sheet.getRange(rowToUpdate, 19).setValue(pNum);
       }
 
       var pC = safeParsePrice(priceC);
       if (!isNaN(pC)) {
         sheet.getRange(rowToUpdate, 20).setValue(pC); // Col T: C 價 (Basic Price)
-      } else if (!isNaN(pNum)) {
+      } else if (!isNaN(pNum) && foundIndex === -1) {
         sheet.getRange(rowToUpdate, 20).setValue(pNum);
       }
       
-      var abVal = (quantity === "" || quantity === undefined) ? 1 : 0;
-      var acVal = abVal === 1 ? "" : (quantity || "0");
-      
-      // Read old stock levels before overwriting
+      // Read old stock levels before checking
       var oldAbVal = foundIndex !== -1 ? sheet.getRange(rowToUpdate, 28).getValue() : 1;
       var oldAcVal = foundIndex !== -1 ? sheet.getRange(rowToUpdate, 29).getValue() : "";
 
-      sheet.getRange(rowToUpdate, 28).setValue(abVal); // Col AB: UnlimitedStock
-      sheet.getRange(rowToUpdate, 29).setValue(acVal); // Col AC: Stock / 庫存
+      // Stock preservation: Only update stock if explicitly passed or adding a new product
+      var shouldUpdateStock = false;
+      var abVal = oldAbVal;
+      var acVal = oldAcVal;
 
-      // Col M (13: Header 'Categories')
-      var remarksVal = (param.remarks !== undefined ? param.remarks : (param.categories !== undefined ? param.categories : "")).toString();
-      var colMCategoriesIndex = 13;
-      var lastCol = Math.min(sheet.getLastColumn(), 50);
-      for (var c = 1; c <= lastCol; c++) {
-        var headerVal = (sheet.getRange(1, c).getValue() || "").toString().trim().toLowerCase();
-        if (headerVal === "categories") {
-          colMCategoriesIndex = c;
-          break;
-        }
+      if (action === 'addProduct' || foundIndex === -1) {
+        shouldUpdateStock = true;
+        abVal = (quantity === "" || quantity === undefined) ? 1 : 0;
+        acVal = abVal === 1 ? "" : (quantity || "0");
+      } else if (quantity !== undefined && quantity !== null && String(quantity).trim() !== "") {
+        shouldUpdateStock = true;
+        abVal = 0;
+        acVal = String(quantity).trim();
+      } else if (param.alwaysStock !== undefined) {
+        shouldUpdateStock = true;
+        abVal = param.alwaysStock ? 1 : 0;
+        acVal = abVal === 1 ? "" : (param.secondaryStockCount || "0");
       }
-      sheet.getRange(rowToUpdate, colMCategoriesIndex).setValue(remarksVal); // Col M: Categories / 備註
+
+      if (shouldUpdateStock) {
+        sheet.getRange(rowToUpdate, 28).setValue(abVal); // Col AB: UnlimitedStock
+        sheet.getRange(rowToUpdate, 29).setValue(acVal); // Col AC: Stock / 庫存
+      }
+
+      // Col M (13: Header 'Categories'): Only update if remarks/categories is explicitly provided
+      if (param.remarks !== undefined || param.categories !== undefined) {
+        var remarksVal = (param.remarks !== undefined ? param.remarks : param.categories).toString();
+        var colMCategoriesIndex = 13;
+        var lastCol = Math.min(sheet.getLastColumn(), 50);
+        for (var c = 1; c <= lastCol; c++) {
+          var headerVal = (sheet.getRange(1, c).getValue() || "").toString().trim().toLowerCase();
+          if (headerVal === "categories") {
+            colMCategoriesIndex = c;
+            break;
+          }
+        }
+        sheet.getRange(rowToUpdate, colMCategoriesIndex).setValue(remarksVal); // Col M: Categories / 備註
+      }
       
       // Col AE (31: Header 'show of pdf') & Col AF (32: Header 'list')
       // Requirement: as '建立商品' (addProduct) is pressed, input '0' to Col AE and Col AF
@@ -7565,9 +7596,9 @@ function doPost(e) {
 
       if (param.stockChanged !== undefined) {
         isStockChange = param.stockChanged === true;
-      } else if (qFrom !== undefined && qTo !== undefined && String(qFrom).trim() !== String(qTo).trim()) {
+      } else if (shouldUpdateStock && qFrom !== undefined && qTo !== undefined && String(qFrom).trim() !== String(qTo).trim()) {
         isStockChange = true;
-      } else if (foundIndex !== -1) {
+      } else if (shouldUpdateStock && foundIndex !== -1) {
         var oldStockNormalized = (oldAbVal == 1 || oldAbVal === "1") ? "" : String(oldAcVal || "").trim();
         var newStockNormalized = (abVal == 1 || abVal === "1") ? "" : String(acVal || "").trim();
         if (oldStockNormalized !== newStockNormalized) {
