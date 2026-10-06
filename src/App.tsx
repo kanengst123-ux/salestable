@@ -2569,14 +2569,16 @@ export default function App() {
 
   // Promotion search results
   const promoSearchResults = useMemo(() => {
-    if (!promoSearchQuery.trim()) return [];
+    if (!promoSearchQuery.trim()) {
+      return products.slice(0, 100);
+    }
     const q = promoSearchQuery.toLowerCase().trim();
     const words = q.split(/\s+/).filter(Boolean);
     return products.filter(p => {
       const pName = (p.costName || p.name || "").toLowerCase();
       const pId = (p.id || "").toLowerCase();
       return words.every(w => pName.includes(w) || pId.includes(w));
-    }).slice(0, 50);
+    }).slice(0, 100);
   }, [promoSearchQuery, products]);
 
   const handleTogglePromoItem = (prod: Product) => {
@@ -8930,146 +8932,111 @@ function revertStockForOrders(orderIdsMap) {
           }}
         >
           <div 
-            className="bg-white rounded-2xl sm:rounded-3xl max-w-4xl w-full max-h-[95vh] overflow-hidden shadow-2xl relative border border-slate-100 flex flex-col"
+            className="bg-white rounded-2xl sm:rounded-3xl max-w-4xl w-full h-[88vh] max-h-[92vh] overflow-hidden shadow-2xl relative border border-slate-100 flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/80 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-rose-100 flex items-center justify-center text-rose-600 shrink-0 shadow-xs">
-                  <Tag className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-slate-950 font-black text-sm md:text-base">
-                      銷售訊息 • 商品限期特價促銷
-                    </h3>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">
-                      自動同步 Col O (Price)
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    在指定日期區間內特價生效並同步至 Google Sheet raw 分頁 Col O，促銷結束後自動還原原價
-                  </p>
-                </div>
-              </div>
+            <div className="px-3 py-2 sm:px-4 sm:py-2.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/80 shrink-0 gap-2">
+              <span className="font-extrabold text-xs text-slate-800 tracking-tight shrink-0 hidden sm:inline">
+                銷售訊息
+              </span>
 
-              <div className="flex items-center gap-2">
-                <div className="flex bg-slate-200/80 p-0.5 rounded-xl text-xs font-bold">
-                  <button
-                    type="button"
-                    onClick={() => setPromoModalTab("selection")}
-                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
-                      promoModalTab === "selection"
-                        ? "bg-white text-slate-900 shadow-xs"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    <Search className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>商品選取</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPromoModalTab("list")}
-                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
-                      promoModalTab === "list"
-                        ? "bg-white text-slate-900 shadow-xs"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    <Tag className="w-3.5 h-3.5 text-rose-600" />
-                    <span>特價清單</span>
-                    {selectedPromoItems.length > 0 && (
-                      <span className="w-4 h-4 rounded-full bg-rose-600 text-white text-[9px] flex items-center justify-center font-bold">
-                        {selectedPromoItems.length}
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      fetchSavedPromotions();
-                      setPromoModalTab("history");
-                    }}
-                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
-                      promoModalTab === "history"
-                        ? "bg-white text-slate-900 shadow-xs"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    <Clock className="w-3.5 h-3.5 text-slate-500" />
-                    <span>促銷記錄</span>
-                    {savedPromotions.length > 0 && (
-                      <span className="w-4 h-4 rounded-full bg-slate-700 text-white text-[9px] flex items-center justify-center font-bold">
-                        {savedPromotions.length}
-                      </span>
-                    )}
-                  </button>
-                </div>
-
-                <button 
+              {/* Three tabs buttons aligned horizontally without icons and no scroll bar */}
+              <div className="flex bg-slate-200/80 p-0.5 rounded-xl text-[11px] sm:text-xs font-bold flex-1 max-w-xs sm:max-w-sm mx-auto justify-center">
+                <button
                   type="button"
-                  onClick={() => setIsSalesPromoOpen(false)}
-                  disabled={isSavingPromo || isGeneratingPromoPdf}
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-all cursor-pointer disabled:opacity-50"
+                  onClick={() => setPromoModalTab("selection")}
+                  className={`flex-1 px-1.5 sm:px-3 py-1 sm:py-1.5 rounded-lg transition-all cursor-pointer text-center whitespace-nowrap ${
+                    promoModalTab === "selection"
+                      ? "bg-white text-slate-900 shadow-xs font-black"
+                      : "text-slate-600 hover:text-slate-900 font-semibold"
+                  }`}
                 >
-                  <X className="w-4 h-4" />
+                  商品選取
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPromoModalTab("list")}
+                  className={`flex-1 px-1.5 sm:px-3 py-1 sm:py-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1 whitespace-nowrap ${
+                    promoModalTab === "list"
+                      ? "bg-white text-slate-900 shadow-xs font-black"
+                      : "text-slate-600 hover:text-slate-900 font-semibold"
+                  }`}
+                >
+                  <span>特價清單</span>
+                  {selectedPromoItems.length > 0 && (
+                    <span className="min-w-3.5 h-3.5 px-1 rounded-full bg-rose-600 text-white text-[9px] flex items-center justify-center font-bold shrink-0">
+                      {selectedPromoItems.length}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    fetchSavedPromotions();
+                    setPromoModalTab("history");
+                  }}
+                  className={`flex-1 px-1.5 sm:px-3 py-1 sm:py-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1 whitespace-nowrap ${
+                    promoModalTab === "history"
+                      ? "bg-white text-slate-900 shadow-xs font-black"
+                      : "text-slate-600 hover:text-slate-900 font-semibold"
+                  }`}
+                >
+                  <span>促銷記錄</span>
+                  {savedPromotions.length > 0 && (
+                    <span className="min-w-3.5 h-3.5 px-1 rounded-full bg-slate-700 text-white text-[9px] flex items-center justify-center font-bold shrink-0">
+                      {savedPromotions.length}
+                    </span>
+                  )}
                 </button>
               </div>
+
+              <button 
+                type="button"
+                onClick={() => setIsSalesPromoOpen(false)}
+                disabled={isSavingPromo || isGeneratingPromoPdf}
+                className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-all cursor-pointer disabled:opacity-50 shrink-0"
+                title="關閉"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
             {/* Modal Body */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+            <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-3 relative flex flex-col">
               {promoModalTab === "selection" && (
-                <div className="space-y-6">
-                  {/* Step 1: Day Range Selector (促銷日期區間) */}
-                  <div className="bg-slate-50/80 rounded-2xl p-4 border border-slate-200/80 space-y-3">
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
+                <div className="space-y-3 flex flex-col flex-1">
+                  {/* Compact Date Range & Presets Strip */}
+                  <div className="bg-slate-50/90 rounded-2xl p-2.5 sm:p-3 border border-slate-200/80 flex flex-wrap items-center justify-between gap-2 shadow-2xs shrink-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5 text-xs font-black text-slate-800">
                         <Calendar className="w-4 h-4 text-rose-600 shrink-0" />
-                        <h4 className="font-extrabold text-xs sm:text-sm text-slate-900">
-                          1. 選擇促銷日期區間 (Day Range)
-                        </h4>
+                        <span>促銷特價期間:</span>
                       </div>
-                      <div className="text-[11px] font-mono font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-100">
-                        區間：{formatPromoDate(promoStartDate)} 至 {formatPromoDate(promoEndDate)}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                          開始日期 (Start Date):
-                        </label>
+                      <div className="flex items-center gap-1.5 font-mono text-xs">
                         <input
                           type="date"
                           value={promoStartDate}
                           onChange={(e) => setPromoStartDate(e.target.value)}
-                          className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white font-mono text-xs focus:ring-2 focus:ring-rose-500 focus:outline-hidden"
+                          className="px-2 py-1 rounded-lg border border-slate-200 bg-white font-bold text-slate-800 text-xs focus:ring-2 focus:ring-rose-500 focus:outline-hidden shadow-2xs"
                         />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                          結束日期 (End Date):
-                        </label>
+                        <span className="text-slate-400 font-bold text-xs">至</span>
                         <input
                           type="date"
                           value={promoEndDate}
                           onChange={(e) => setPromoEndDate(e.target.value)}
-                          className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white font-mono text-xs focus:ring-2 focus:ring-rose-500 focus:outline-hidden"
+                          className="px-2 py-1 rounded-lg border border-slate-200 bg-white font-bold text-slate-800 text-xs focus:ring-2 focus:ring-rose-500 focus:outline-hidden shadow-2xs"
                         />
                       </div>
                     </div>
 
-                    {/* Quick presets buttons */}
-                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                      <span className="text-[10px] font-bold text-slate-400">快速設定:</span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] font-bold text-slate-400 hidden sm:inline">快速:</span>
                       {[
-                        { label: "今天起 3 天", days: 3 },
-                        { label: "一週特賣 (7天)", days: 7 },
-                        { label: "週末促銷 (2天)", days: 2 },
-                        { label: "雙週促銷 (14天)", days: 14 },
-                        { label: "當月特賣 (30天)", days: 30 },
+                        { label: "3天", days: 3 },
+                        { label: "7天 (1週)", days: 7 },
+                        { label: "14天 (雙週)", days: 14 },
+                        { label: "30天 (當月)", days: 30 },
                       ].map((preset) => (
                         <button
                           key={preset.label}
@@ -9081,187 +9048,160 @@ function revertStockForOrders(orderIdsMap) {
                             setPromoStartDate(today.toISOString().slice(0, 10));
                             setPromoEndDate(end.toISOString().slice(0, 10));
                           }}
-                          className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300 text-slate-600 border border-slate-200 transition-colors cursor-pointer"
+                          className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white hover:bg-rose-50 hover:text-rose-700 text-slate-600 border border-slate-200 transition-colors cursor-pointer shadow-2xs"
                         >
                           {preset.label}
                         </button>
                       ))}
-                    </div>
 
-                    {/* Real-time status indicator notice */}
-                    {(() => {
-                      const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(new Date());
-                      const isTodayInRange = promoStartDate <= todayStr && todayStr <= promoEndDate;
-                      const isPast = todayStr > promoEndDate;
-                      if (isTodayInRange) {
-                        return (
-                          <div className="flex items-center gap-2 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold animate-fadeIn">
-                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                            <span>
-                              ⚡ 促銷期間包含今日 ({formatPromoDate(todayStr)})！儲存完成後，特價將<strong>立即寫入 Google Sheet raw 分頁 Col O (Price)</strong>，過期後自動還原！
+                      {(() => {
+                        const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(new Date());
+                        const isTodayInRange = promoStartDate <= todayStr && todayStr <= promoEndDate;
+                        const isPast = todayStr > promoEndDate;
+                        if (isTodayInRange) {
+                          return (
+                            <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                              今日即時生效
                             </span>
-                          </div>
-                        );
-                      } else if (isPast) {
-                        return (
-                          <div className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold animate-fadeIn">
-                            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                            <span>⚠️ 所選日期已過期，請選擇包含今天或未來的日期區間。</span>
-                          </div>
-                        );
-                      } else {
-                        return (
-                          <div className="flex items-center gap-2 p-2.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-[11px] font-bold animate-fadeIn">
-                            <Clock className="w-4 h-4 text-blue-600 shrink-0" />
-                            <span>
-                              🕒 排程促銷：將於促銷首日 ({formatPromoDate(promoStartDate)}) 自動生效寫入 Col O (Price)，結束後自動還原原價。
+                          );
+                        } else if (isPast) {
+                          return (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800">
+                              已過期
                             </span>
-                          </div>
-                        );
-                      }
-                    })()}
+                          );
+                        } else {
+                          return (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-100 text-blue-800">
+                              🕒 排程中
+                            </span>
+                          );
+                        }
+                      })()}
+                    </div>
                   </div>
 
-                  {/* Step 2: Product Name Search Bar & Multi-Select */}
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <Search className="w-4 h-4 text-indigo-600 shrink-0" />
-                        <h4 className="font-extrabold text-xs sm:text-sm text-slate-900">
-                          2. 搜尋並選取商品（可多選）
-                        </h4>
-                      </div>
-                      <span className="text-[11px] text-slate-400">
-                        輸入關鍵字多選加入特價清單
-                      </span>
-                    </div>
-
-                    <div className="relative">
-                      <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  {/* Search and Action Bar */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 shrink-0">
+                    <div className="relative flex-1">
+                      <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                       <input
                         type="text"
-                        placeholder="輸入商品名稱關鍵字搜尋（例如：奶粉、面膜、油、牙膏）..."
+                        placeholder="搜尋商品名稱、編號 SKU 加入特價清單..."
                         value={promoSearchQuery}
                         onChange={(e) => setPromoSearchQuery(e.target.value)}
-                        className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-rose-500 focus:outline-hidden text-xs"
+                        className="w-full pl-9 pr-9 py-2 rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-rose-500 focus:outline-hidden text-xs"
                       />
                       {promoSearchQuery && (
                         <button
                           type="button"
                           onClick={() => setPromoSearchQuery("")}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer p-0.5"
                         >
-                          <X className="w-4 h-4" />
+                          <X className="w-3.5 h-3.5" />
                         </button>
                       )}
                     </div>
 
-                    {/* Search results picker box */}
-                    {promoSearchQuery.trim() !== "" && (
-                      <div className="border border-slate-200 rounded-2xl bg-white overflow-hidden shadow-xs">
-                        <div className="p-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-xs">
-                          <span className="font-bold text-slate-600 text-[11px]">
-                            符合「{promoSearchQuery}」的商品：共 {promoSearchResults.length} 款
+                    <div className="flex items-center gap-2 justify-between sm:justify-end">
+                      <span className="text-[11px] font-medium text-slate-500">
+                        顯示 <strong>{promoSearchResults.length}</strong> 款
+                        {selectedPromoItems.length > 0 && (
+                          <span className="ml-1 text-rose-700 font-extrabold bg-rose-50 px-2 py-0.5 rounded-md border border-rose-100">
+                            已選 {selectedPromoItems.length} 款
                           </span>
-                          {promoSearchResults.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={handleSelectAllPromoResults}
-                              className="text-[11px] font-extrabold text-rose-600 hover:text-rose-800 cursor-pointer underline"
-                            >
-                              ＋全選加入清單
-                            </button>
-                          )}
-                        </div>
-
-                        {promoSearchResults.length === 0 ? (
-                          <div className="p-6 text-center text-xs text-slate-400">
-                            沒有找到符合「{promoSearchQuery}」的商品，請嘗試不同關鍵字。
-                          </div>
-                        ) : (
-                          <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
-                            {promoSearchResults.map((prod) => {
-                              const isSelected = selectedPromoItems.some((it) => it.id === prod.id);
-                              return (
-                                <div
-                                  key={prod.id}
-                                  onClick={() => handleTogglePromoItem(prod)}
-                                  className={`p-2.5 flex items-center justify-between gap-3 hover:bg-rose-50/40 transition-colors cursor-pointer ${
-                                    isSelected ? "bg-rose-50/70" : ""
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-3 min-w-0">
-                                    <input
-                                      type="checkbox"
-                                      checked={isSelected}
-                                      onChange={() => {}} // handled by parent onClick
-                                      className="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 accent-rose-600 cursor-pointer shrink-0"
-                                    />
-                                    <div className="w-8 h-8 rounded-lg bg-slate-100 overflow-hidden shrink-0 border border-slate-200/60">
-                                      <ProductImage
-                                        id={prod.id}
-                                        name={prod.name}
-                                        fallbackUrl={prod.extraAttributes?.["Image URLs"]}
-                                        version={imageVersion}
-                                        className="w-full h-full object-cover"
-                                      />
-                                    </div>
-                                    <div className="min-w-0">
-                                      <div className="text-xs font-bold text-slate-800 truncate">
-                                        {prod.costName || prod.name}
-                                      </div>
-                                      <div className="text-[10px] text-slate-400 font-mono">
-                                        ID: {prod.id} • 原售價: HK${parseFloat(getProductPrice(prod)).toFixed(2)}
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  <div className="shrink-0 flex items-center gap-2">
-                                    {isSelected ? (
-                                      <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                                        ✓ 已加入
-                                      </span>
-                                    ) : (
-                                      <span className="text-[10px] font-bold text-slate-500 hover:text-rose-600 bg-white border border-slate-200 px-2 py-0.5 rounded-lg shadow-2xs">
-                                        ＋加入
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
                         )}
-                      </div>
-                    )}
+                      </span>
+
+                      {promoSearchResults.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleSelectAllPromoResults}
+                          className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                        >
+                          <CheckSquare className="w-3.5 h-3.5 text-rose-600" />
+                          <span>全選顯示商品</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Summary row when items are selected */}
-                  {selectedPromoItems.length > 0 && (
-                    <div className="p-3 bg-rose-50/70 border border-rose-200 rounded-2xl flex items-center justify-between text-xs animate-fadeIn">
-                      <div className="flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-rose-600 shrink-0" />
-                        <span className="text-rose-950 font-bold">
-                          已選取 <strong>{selectedPromoItems.length}</strong> 款商品加入特價清單
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setPromoModalTab("list")}
-                        className="text-xs font-black text-rose-700 hover:text-rose-900 flex items-center gap-1 underline cursor-pointer"
-                      >
-                        <span>展開特價清單編輯售價</span>
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
+                  {/* Immediate Product Selection List - Never Empty */}
+                  <div className="flex-1 min-h-[260px] border border-slate-200 rounded-2xl bg-white overflow-hidden shadow-xs flex flex-col">
+                    <div className="p-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-xs text-slate-600 font-bold shrink-0">
+                      <span>勾選商品加入特價清單（可點擊整行或加入按鈕）</span>
+                      <span className="text-[10px] text-slate-400 font-normal">多選無上限</span>
                     </div>
-                  )}
+
+                    <div className="flex-1 overflow-y-auto divide-y divide-slate-100 max-h-[50vh]">
+                      {promoSearchResults.length === 0 ? (
+                        <div className="p-8 text-center text-xs text-slate-400">
+                          沒有找到符合「{promoSearchQuery}」的商品，請嘗試其他關鍵字。
+                        </div>
+                      ) : (
+                        promoSearchResults.map((prod) => {
+                          const isSelected = selectedPromoItems.some((it) => it.id === prod.id);
+                          return (
+                            <div
+                              key={prod.id}
+                              onClick={() => handleTogglePromoItem(prod)}
+                              className={`p-2.5 sm:p-3 flex items-center justify-between gap-3 hover:bg-rose-50/50 transition-colors cursor-pointer ${
+                                isSelected ? "bg-rose-50/80" : ""
+                              }`}
+                            >
+                              <div className="flex items-center gap-3 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => {}}
+                                  className="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 accent-rose-600 cursor-pointer shrink-0"
+                                />
+                                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-slate-100 overflow-hidden shrink-0 border border-slate-200/60">
+                                  <ProductImage
+                                    id={prod.id}
+                                    name={prod.name}
+                                    fallbackUrl={prod.extraAttributes?.["Image URLs"]}
+                                    version={imageVersion}
+                                    className="w-full h-full object-cover"
+                                  />
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="text-xs sm:text-sm font-bold text-slate-900 truncate">
+                                    {prod.costName || prod.name}
+                                  </div>
+                                  <div className="text-[10px] sm:text-[11px] text-slate-400 font-mono flex items-center gap-2 mt-0.5">
+                                    <span>ID: {prod.id}</span>
+                                    <span>•</span>
+                                    <span className="font-bold text-slate-600">原售價: HK${parseFloat(getProductPrice(prod)).toFixed(2)}</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="shrink-0 flex items-center gap-2">
+                                {isSelected ? (
+                                  <span className="text-[10px] sm:text-xs font-black text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full border border-emerald-200">
+                                    ✓ 已加入特價
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] sm:text-xs font-bold text-slate-600 hover:text-rose-600 bg-white border border-slate-200 px-2.5 py-1 rounded-xl shadow-2xs transition-colors">
+                                    ＋加入特價
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
 
                   {/* Hover Button: Pops up the Selected Products List Tab */}
-                  <div className="sticky bottom-1 z-30 pt-4 pb-1 flex justify-end">
+                  <div className="sticky bottom-1 z-30 pt-1 flex justify-end">
                     <button
                       type="button"
                       onClick={() => setPromoModalTab("list")}
-                      className={`group relative flex items-center gap-3 px-5 py-3 rounded-full shadow-xl border transition-all duration-200 transform hover:scale-105 active:scale-95 cursor-pointer ${
+                      className={`group relative flex items-center gap-2.5 px-4 sm:px-5 py-2.5 rounded-full shadow-xl border transition-all duration-200 transform hover:scale-105 active:scale-95 cursor-pointer ${
                         selectedPromoItems.length > 0
                           ? "bg-rose-600 hover:bg-rose-700 text-white border-rose-500 shadow-rose-300/60"
                           : "bg-white hover:bg-slate-50 text-slate-700 border-slate-300 shadow-slate-200"
@@ -9269,7 +9209,7 @@ function revertStockForOrders(orderIdsMap) {
                       title="點擊展開已選特價商品清單分頁"
                     >
                       <div className="relative">
-                        <FileText className={`w-4 h-4 ${selectedPromoItems.length > 0 ? "text-white" : "text-rose-600"}`} />
+                        <Tag className={`w-4 h-4 ${selectedPromoItems.length > 0 ? "text-white" : "text-rose-600"}`} />
                         {selectedPromoItems.length > 0 && (
                           <span className="absolute -top-2 -right-2 min-w-4 h-4 px-1 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black flex items-center justify-center shadow-xs">
                             {selectedPromoItems.length}
@@ -9277,12 +9217,12 @@ function revertStockForOrders(orderIdsMap) {
                         )}
                       </div>
                       <div className="flex flex-col text-left">
-                        <span className="text-xs font-black tracking-tight leading-tight flex items-center gap-1.5">
+                        <span className="text-xs font-black tracking-tight leading-tight flex items-center gap-1">
                           <span>{selectedPromoItems.length > 0 ? `查看特價清單 (${selectedPromoItems.length} 款)` : "特價清單 (0)"}</span>
-                          <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+                          <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
                         </span>
-                        <span className={`text-[10px] leading-tight ${selectedPromoItems.length > 0 ? "text-rose-100" : "text-slate-400"}`}>
-                          {selectedPromoItems.length > 0 ? "點擊前往編輯售價與匯出 PDF" : "點此開啟特價清單分頁"}
+                        <span className={`text-[9px] leading-tight ${selectedPromoItems.length > 0 ? "text-rose-100" : "text-slate-400"}`}>
+                          前往編輯售價與匯出 PDF
                         </span>
                       </div>
                     </button>
@@ -9291,33 +9231,30 @@ function revertStockForOrders(orderIdsMap) {
               )}
 
               {promoModalTab === "list" && (
-                <div className="space-y-4 animate-fadeIn">
+                <div className="space-y-3.5 animate-fadeIn flex flex-col flex-1">
                   {/* Top Bar of the popped up list with 'Go Back' button */}
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-200/80">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 pb-2.5 border-b border-slate-200/80">
                     <div className="flex items-center gap-3">
                       <button
                         type="button"
                         onClick={() => setPromoModalTab("selection")}
-                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-800 text-xs font-bold transition-all cursor-pointer shadow-2xs group"
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-800 text-xs font-bold transition-all cursor-pointer shadow-2xs group"
                         title="隱藏清單並返回商品選取分頁"
                       >
                         <ArrowLeft className="w-4 h-4 text-slate-600 group-hover:-translate-x-1 transition-transform" />
                         <span>返回商品選取 (Go Back)</span>
                       </button>
-                      <div>
-                        <h4 className="font-extrabold text-xs sm:text-sm text-slate-900 flex items-center gap-2">
-                          <span>促銷商品特價清單</span>
-                          <span className="text-[11px] font-bold text-rose-700 bg-rose-50 px-2.5 py-0.5 rounded-lg border border-rose-100">
-                            已選取 {selectedPromoItems.length} 款
-                          </span>
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-extrabold text-xs sm:text-sm text-slate-900">
+                          促銷商品特價清單
                         </h4>
-                        <p className="text-[11px] text-slate-500">
-                          僅 2 欄位：商品名稱 與 售價（可在欄位內直接編輯特價售價）
-                        </p>
+                        <span className="text-[10px] sm:text-[11px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-100">
+                          共 {selectedPromoItems.length} 款
+                        </span>
                       </div>
                     </div>
 
-                    <div className="text-[11px] font-mono font-bold text-rose-700 bg-rose-50 px-3 py-1.5 rounded-xl border border-rose-100 flex items-center gap-1.5 shrink-0">
+                    <div className="text-[11px] font-mono font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-100 flex items-center gap-1.5 shrink-0">
                       <Calendar className="w-3.5 h-3.5 text-rose-600" />
                       <span>區間：{formatPromoDate(promoStartDate)} 至 {formatPromoDate(promoEndDate)}</span>
                     </div>
