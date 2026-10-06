@@ -3292,11 +3292,11 @@ export default function App() {
       }
 
       if (data.products) {
-        // Safe client-side deduplication by ID, ensuring only products marked as 'show on pdf' are loaded
+        // Safe client-side deduplication by ID, ensuring all products are loaded and available for editing ('編輯')
         const uniqueProducts: any[] = [];
         const seenIds = new Set<string>();
         for (const p of data.products) {
-          if (p && p.id && !seenIds.has(p.id) && isProductShowOnPdf(p)) {
+          if (p && p.id && !seenIds.has(p.id)) {
             seenIds.add(p.id);
             uniqueProducts.push(p);
           }
@@ -3348,7 +3348,7 @@ export default function App() {
         }
 
         if (cachedProductsStr) {
-          const parsedProducts = JSON.parse(cachedProductsStr).filter(isProductShowOnPdf);
+          const parsedProducts = JSON.parse(cachedProductsStr);
           setProducts(parsedProducts);
           setUsingOfflineBackup(true);
           if (cachedCostStr) {
@@ -3521,8 +3521,8 @@ export default function App() {
 
   // Filtered and Sorted Products
   const processedProducts = useMemo(() => {
-    // Only include products that are 'show on pdf' (i.e. not 'N' in Col AE of 'raw' tab)
-    let result = products.filter(isProductShowOnPdf);
+    // Include all products so all items are available for browsing, inventory and editing ('編輯')
+    let result = [...products];
 
     // 1. Search Query Filter
     if (searchQuery.trim() !== "") {
@@ -3552,7 +3552,7 @@ export default function App() {
       });
     }
 
-    // 3. Stock Status Filter
+    // 3. Stock & PDF Status Filter
     if (stockFilter === "in-stock") {
       result = result.filter(p => p.hasStock);
     } else if (stockFilter === "out-of-stock") {
@@ -3561,6 +3561,10 @@ export default function App() {
       result = result.filter(p => p.alwaysStock);
     } else if (stockFilter === "zero-stock") {
       result = result.filter(p => !p.alwaysStock && p.secondaryStockCount === "0");
+    } else if (stockFilter === "pdf-hidden") {
+      result = result.filter(p => !isProductShowOnPdf(p));
+    } else if (stockFilter === "pdf-only") {
+      result = result.filter(p => isProductShowOnPdf(p));
     } else if (stockFilter === "dead-stock") {
       const soldNamesNormalized = new Set(
         Object.keys(soldData).map(name => name.replace(/\s+/g, "").trim().toLowerCase())
@@ -4362,7 +4366,14 @@ export default function App() {
                               </button>
                             </td>
                             <td className="px-4 py-2">
-                              <div className="font-bold text-slate-800 line-clamp-1">{prod.name}</div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-bold text-slate-800 line-clamp-1">{prod.name}</span>
+                                {!isProductShowOnPdf(prod) && (
+                                  <span className="shrink-0 text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200" title="此商品在 Col AE 設為 N (不包含於 PDF 目錄)">
+                                    PDF: N
+                                  </span>
+                                )}
+                              </div>
                               <div className="text-[10px] text-slate-405 mt-0.5 line-clamp-1 text-slate-400">
                                 {prod.costCategoryName || prod.extraAttributes?.["Categories"] || "無分類"}
                               </div>
@@ -4844,12 +4855,14 @@ export default function App() {
                   className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 border border-slate-200 hover:bg-slate-100/50 rounded-xl text-xs font-semibold text-slate-700 transition-all outline-none"
                 >
                   <span className="truncate">
-                    {stockFilter === "all" && "顯示全部商品"}
+                    {stockFilter === "all" && "顯示全部商品 (含 Col AE=N)"}
                     {stockFilter === "in-stock" && "僅顯示有現貨"}
                     {stockFilter === "out-of-stock" && "無現貨 (不顯示/圖片置灰)"}
                     {stockFilter === "always-stock" && "長期充足 (無限量供應)"}
                     {stockFilter === "zero-stock" && "缺貨產品 (Col AB & AC = 0)"}
                     {stockFilter === "dead-stock" && "死貨產品 (2週未售出)"}
+                    {stockFilter === "pdf-hidden" && "不顯示於 PDF (Col AE = N)"}
+                    {stockFilter === "pdf-only" && "PDF 目錄商品 (Col AE = 0)"}
                   </span>
                   <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isStockDropdownOpen ? "rotate-180" : ""}`} />
                 </button>
@@ -4857,7 +4870,9 @@ export default function App() {
                 {isStockDropdownOpen && (
                   <div className="absolute left-0 right-0 mt-1.5 bg-white border border-slate-150 rounded-xl shadow-lg z-50 py-1">
                     {[
-                      { value: "all", label: "顯示全部商品" },
+                      { value: "all", label: "顯示全部商品 (含 Col AE=N)" },
+                      { value: "pdf-hidden", label: "不顯示於 PDF (Col AE = N)" },
+                      { value: "pdf-only", label: "PDF 目錄商品 (Col AE = 0)" },
                       { value: "in-stock", label: "僅顯示有現貨" },
                       { value: "out-of-stock", label: "無現貨 (不顯示/圖片置灰)" },
                       { value: "always-stock", label: "長期充足 (無限量供應)" },

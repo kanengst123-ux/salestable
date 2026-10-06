@@ -2232,12 +2232,11 @@ app.get("/api/products", async (req, res) => {
       };
     });
     
-    // Only include products that are 'show on pdf' (i.e. not 'N' in Col AE of 'raw' tab)
-    const showOnPdfProducts = decoratedProducts.filter(isProductShowOnPdf);
-    res.json({ products: showOnPdfProducts, costCategories, promoCategories });
+    // Return all products so all products are available for viewing, searching, and editing ('編輯')
+    res.json({ products: decoratedProducts, costCategories, promoCategories });
   } catch (error) {
     console.error("Get products error:", error);
-    res.json({ products: getLocalProducts().filter(isProductShowOnPdf), costCategories: { symbolToName: {}, productIdToSymbol: {}, productIdToCostName: {}, categoryOrder: [], highlightCategories: [] }, promoCategories: [] });
+    res.json({ products: getLocalProducts(), costCategories: { symbolToName: {}, productIdToSymbol: {}, productIdToCostName: {}, categoryOrder: [], highlightCategories: [] }, promoCategories: [] });
   }
 });
 
