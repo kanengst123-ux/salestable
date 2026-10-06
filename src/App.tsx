@@ -51,6 +51,7 @@ import {
   TrendingUp,
   History,
   ArrowRight,
+  ArrowLeft,
   CheckSquare,
   Printer,
   Tag,
@@ -2535,7 +2536,7 @@ export default function App() {
   const [loadingPromotions, setLoadingPromotions] = useState<boolean>(false);
   const [isSavingPromo, setIsSavingPromo] = useState<boolean>(false);
   const [isGeneratingPromoPdf, setIsGeneratingPromoPdf] = useState<boolean>(false);
-  const [promoModalTab, setPromoModalTab] = useState<"create" | "history">("create");
+  const [promoModalTab, setPromoModalTab] = useState<"selection" | "list" | "history">("selection");
 
   const fetchSavedPromotions = async () => {
     try {
@@ -4574,6 +4575,7 @@ export default function App() {
                     <button
                       onClick={() => {
                         fetchSavedPromotions();
+                        setPromoModalTab("selection");
                         setIsSalesPromoOpen(true);
                       }}
                       className="p-3 text-left rounded-xl border border-rose-200/80 hover:border-rose-400 bg-rose-50/50 hover:bg-rose-100/60 text-slate-800 transition-all flex flex-col gap-1 cursor-pointer group shadow-xs"
@@ -8956,14 +8958,32 @@ function revertStockForOrders(orderIdsMap) {
                 <div className="flex bg-slate-200/80 p-0.5 rounded-xl text-xs font-bold">
                   <button
                     type="button"
-                    onClick={() => setPromoModalTab("create")}
-                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                      promoModalTab === "create"
+                    onClick={() => setPromoModalTab("selection")}
+                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                      promoModalTab === "selection"
                         ? "bg-white text-slate-900 shadow-xs"
                         : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
-                    建立特價清單
+                    <Search className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>商品選取</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPromoModalTab("list")}
+                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                      promoModalTab === "list"
+                        ? "bg-white text-slate-900 shadow-xs"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    <Tag className="w-3.5 h-3.5 text-rose-600" />
+                    <span>特價清單</span>
+                    {selectedPromoItems.length > 0 && (
+                      <span className="w-4 h-4 rounded-full bg-rose-600 text-white text-[9px] flex items-center justify-center font-bold">
+                        {selectedPromoItems.length}
+                      </span>
+                    )}
                   </button>
                   <button
                     type="button"
@@ -8977,9 +8997,10 @@ function revertStockForOrders(orderIdsMap) {
                         : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
+                    <Clock className="w-3.5 h-3.5 text-slate-500" />
                     <span>促銷記錄</span>
                     {savedPromotions.length > 0 && (
-                      <span className="w-4 h-4 rounded-full bg-rose-600 text-white text-[9px] flex items-center justify-center font-bold">
+                      <span className="w-4 h-4 rounded-full bg-slate-700 text-white text-[9px] flex items-center justify-center font-bold">
                         {savedPromotions.length}
                       </span>
                     )}
@@ -8999,8 +9020,8 @@ function revertStockForOrders(orderIdsMap) {
 
             {/* Modal Body */}
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
-              {promoModalTab === "create" ? (
-                <>
+              {promoModalTab === "selection" && (
+                <div className="space-y-6">
                   {/* Step 1: Day Range Selector (促銷日期區間) */}
                   <div className="bg-slate-50/80 rounded-2xl p-4 border border-slate-200/80 space-y-3">
                     <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
@@ -9215,144 +9236,228 @@ function revertStockForOrders(orderIdsMap) {
                     )}
                   </div>
 
-                  {/* Step 3: The 2-Column List (Name & Editable Price) */}
-                  <div className="space-y-3">
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                  {/* Summary row when items are selected */}
+                  {selectedPromoItems.length > 0 && (
+                    <div className="p-3 bg-rose-50/70 border border-rose-200 rounded-2xl flex items-center justify-between text-xs animate-fadeIn">
                       <div className="flex items-center gap-2">
-                        <Tag className="w-4 h-4 text-rose-600 shrink-0" />
-                        <h4 className="font-extrabold text-xs sm:text-sm text-slate-900">
-                          3. 促銷商品特價清單 (僅 2 欄位：商品名稱 與 售價)
-                        </h4>
+                        <CheckCircle2 className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span className="text-rose-950 font-bold">
+                          已選取 <strong>{selectedPromoItems.length}</strong> 款商品加入特價清單
+                        </span>
                       </div>
-                      <span className="text-xs font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-100">
-                        已選取 {selectedPromoItems.length} 款特價商品
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setPromoModalTab("list")}
+                        className="text-xs font-black text-rose-700 hover:text-rose-900 flex items-center gap-1 underline cursor-pointer"
+                      >
+                        <span>展開特價清單編輯售價</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Hover Button: Pops up the Selected Products List Tab */}
+                  <div className="sticky bottom-1 z-30 pt-4 pb-1 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setPromoModalTab("list")}
+                      className={`group relative flex items-center gap-3 px-5 py-3 rounded-full shadow-xl border transition-all duration-200 transform hover:scale-105 active:scale-95 cursor-pointer ${
+                        selectedPromoItems.length > 0
+                          ? "bg-rose-600 hover:bg-rose-700 text-white border-rose-500 shadow-rose-300/60"
+                          : "bg-white hover:bg-slate-50 text-slate-700 border-slate-300 shadow-slate-200"
+                      }`}
+                      title="點擊展開已選特價商品清單分頁"
+                    >
+                      <div className="relative">
+                        <FileText className={`w-4 h-4 ${selectedPromoItems.length > 0 ? "text-white" : "text-rose-600"}`} />
+                        {selectedPromoItems.length > 0 && (
+                          <span className="absolute -top-2 -right-2 min-w-4 h-4 px-1 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black flex items-center justify-center shadow-xs">
+                            {selectedPromoItems.length}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-col text-left">
+                        <span className="text-xs font-black tracking-tight leading-tight flex items-center gap-1.5">
+                          <span>{selectedPromoItems.length > 0 ? `查看特價清單 (${selectedPromoItems.length} 款)` : "特價清單 (0)"}</span>
+                          <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+                        </span>
+                        <span className={`text-[10px] leading-tight ${selectedPromoItems.length > 0 ? "text-rose-100" : "text-slate-400"}`}>
+                          {selectedPromoItems.length > 0 ? "點擊前往編輯售價與匯出 PDF" : "點此開啟特價清單分頁"}
+                        </span>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {promoModalTab === "list" && (
+                <div className="space-y-4 animate-fadeIn">
+                  {/* Top Bar of the popped up list with 'Go Back' button */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-200/80">
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setPromoModalTab("selection")}
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-800 text-xs font-bold transition-all cursor-pointer shadow-2xs group"
+                        title="隱藏清單並返回商品選取分頁"
+                      >
+                        <ArrowLeft className="w-4 h-4 text-slate-600 group-hover:-translate-x-1 transition-transform" />
+                        <span>返回商品選取 (Go Back)</span>
+                      </button>
+                      <div>
+                        <h4 className="font-extrabold text-xs sm:text-sm text-slate-900 flex items-center gap-2">
+                          <span>促銷商品特價清單</span>
+                          <span className="text-[11px] font-bold text-rose-700 bg-rose-50 px-2.5 py-0.5 rounded-lg border border-rose-100">
+                            已選取 {selectedPromoItems.length} 款
+                          </span>
+                        </h4>
+                        <p className="text-[11px] text-slate-500">
+                          僅 2 欄位：商品名稱 與 售價（可在欄位內直接編輯特價售價）
+                        </p>
+                      </div>
                     </div>
 
-                    {/* Batch Discount Toolbar */}
-                    {selectedPromoItems.length > 0 && (
-                      <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-[11px] font-bold text-slate-500">批次特價計算:</span>
-                          <button
-                            type="button"
-                            onClick={() => handleBatchDiscount(0.9)}
-                            className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
-                            title="所有特價商品打 9 折"
-                          >
-                            9折
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleBatchDiscount(0.85)}
-                            className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
-                            title="所有特價商品打 85 折"
-                          >
-                            85折
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleBatchDiscount(0.8)}
-                            className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
-                            title="所有特價商品打 8 折"
-                          >
-                            8折
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleBatchDeduct(10)}
-                            className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
-                            title="每件商品原價減 HK$10"
-                          >
-                            減 HK$10
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleBatchDeduct(20)}
-                            className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
-                            title="每件商品原價減 HK$20"
-                          >
-                            減 HK$20
-                          </button>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => setSelectedPromoItems([])}
-                          className="text-[11px] font-bold text-slate-400 hover:text-rose-600 transition-colors cursor-pointer underline"
-                        >
-                          清空清單
-                        </button>
-                      </div>
-                    )}
-
-                    {/* Exact 2-Column Table */}
-                    <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-xs">
-                      <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-900 text-white font-extrabold text-[11px] uppercase tracking-wider">
-                          <tr>
-                            <th className="px-4 py-3">欄位 1: 商品名稱 (Name)</th>
-                            <th className="px-4 py-3 text-right w-44">欄位 2: 售價 (Price)</th>
-                            <th className="w-12 px-2 py-3 text-center">操作</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {selectedPromoItems.length === 0 ? (
-                            <tr>
-                              <td colSpan={3} className="px-4 py-12 text-center text-slate-400 italic">
-                                目前尚未選取任何促銷商品。請在上方搜尋商品名稱加入清單。
-                              </td>
-                            </tr>
-                          ) : (
-                            selectedPromoItems.map((item, index) => (
-                              <tr key={item.id} className="hover:bg-slate-50/60 transition-colors">
-                                {/* Column 1: Name */}
-                                <td className="px-4 py-3">
-                                  <div className="font-bold text-slate-900 text-xs sm:text-sm line-clamp-2">
-                                    {item.name}
-                                  </div>
-                                  <div className="text-[10px] text-slate-400 font-mono mt-0.5">
-                                    原售價: HK${parseFloat(item.originalPrice).toFixed(2)} • SKU: {item.id}
-                                  </div>
-                                </td>
-
-                                {/* Column 2: Editable Price */}
-                                <td className="px-4 py-3 text-right">
-                                  <div className="flex items-center justify-end gap-1.5">
-                                    <span className="text-xs font-bold text-slate-400 font-mono">HK$</span>
-                                    <input
-                                      type="number"
-                                      step="0.1"
-                                      min="0"
-                                      value={item.price}
-                                      onChange={(e) => handleUpdatePromoItemPrice(item.id, e.target.value)}
-                                      className="w-28 px-2.5 py-1.5 text-right font-black text-rose-700 bg-rose-50/60 border border-rose-300 focus:bg-white focus:border-rose-600 focus:ring-2 focus:ring-rose-200 rounded-lg text-xs sm:text-sm font-mono shadow-2xs"
-                                      title="點擊直接修改特價售價"
-                                    />
-                                  </div>
-                                </td>
-
-                                {/* Action */}
-                                <td className="px-2 py-3 text-center">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRemovePromoItem(item.id)}
-                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                                    title="從清單移除"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
+                    <div className="text-[11px] font-mono font-bold text-rose-700 bg-rose-50 px-3 py-1.5 rounded-xl border border-rose-100 flex items-center gap-1.5 shrink-0">
+                      <Calendar className="w-3.5 h-3.5 text-rose-600" />
+                      <span>區間：{formatPromoDate(promoStartDate)} 至 {formatPromoDate(promoEndDate)}</span>
                     </div>
                   </div>
-                </>
-              ) : (
-                /* Tab 2: History & Active Campaigns */
+
+                  {/* Batch Discount Toolbar */}
+                  {selectedPromoItems.length > 0 && (
+                    <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[11px] font-bold text-slate-500">批次特價計算:</span>
+                        <button
+                          type="button"
+                          onClick={() => handleBatchDiscount(0.9)}
+                          className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
+                          title="所有特價商品打 9 折"
+                        >
+                          9折
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleBatchDiscount(0.85)}
+                          className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
+                          title="所有特價商品打 85 折"
+                        >
+                          85折
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleBatchDiscount(0.8)}
+                          className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
+                          title="所有特價商品打 8 折"
+                        >
+                          8折
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleBatchDeduct(10)}
+                          className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
+                          title="每件商品原價減 HK$10"
+                        >
+                          減 HK$10
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleBatchDeduct(20)}
+                          className="px-2 py-1 rounded-lg bg-white hover:bg-rose-50 hover:text-rose-700 border border-slate-200 font-bold text-[10px] transition-colors cursor-pointer"
+                          title="每件商品原價減 HK$20"
+                        >
+                          減 HK$20
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPromoItems([])}
+                        className="text-[11px] font-bold text-slate-400 hover:text-rose-600 transition-colors cursor-pointer underline"
+                      >
+                        清空清單
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Exact 2-Column Table */}
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-xs">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-900 text-white font-extrabold text-[11px] uppercase tracking-wider">
+                        <tr>
+                          <th className="px-4 py-3">欄位 1: 商品名稱 (NAME)</th>
+                          <th className="px-4 py-3 text-right w-44">欄位 2: 售價 (PRICE)</th>
+                          <th className="w-12 px-2 py-3 text-center">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {selectedPromoItems.length === 0 ? (
+                          <tr>
+                            <td colSpan={3} className="px-4 py-16 text-center text-slate-400">
+                              <div className="max-w-sm mx-auto space-y-3">
+                                <p className="text-xs italic">目前清單內尚未選取任何促銷商品。</p>
+                                <button
+                                  type="button"
+                                  onClick={() => setPromoModalTab("selection")}
+                                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                                >
+                                  <ArrowLeft className="w-3.5 h-3.5" />
+                                  <span>前往搜尋並選取商品</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : (
+                          selectedPromoItems.map((item) => (
+                            <tr key={item.id} className="hover:bg-slate-50/60 transition-colors">
+                              {/* Column 1: Name */}
+                              <td className="px-4 py-3">
+                                <div className="font-bold text-slate-900 text-xs sm:text-sm line-clamp-2">
+                                  {item.name}
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                  原售價: HK${parseFloat(item.originalPrice).toFixed(2)} • SKU: {item.id}
+                                </div>
+                              </td>
+
+                              {/* Column 2: Editable Price */}
+                              <td className="px-4 py-3 text-right">
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <span className="text-xs font-bold text-slate-400 font-mono">HK$</span>
+                                  <input
+                                    type="number"
+                                    step="0.1"
+                                    min="0"
+                                    value={item.price}
+                                    onChange={(e) => handleUpdatePromoItemPrice(item.id, e.target.value)}
+                                    className="w-28 px-2.5 py-1.5 text-right font-black text-rose-700 bg-rose-50/60 border border-rose-300 focus:bg-white focus:border-rose-600 focus:ring-2 focus:ring-rose-200 rounded-lg text-xs sm:text-sm font-mono shadow-2xs"
+                                    title="點擊直接修改特價售價"
+                                  />
+                                </div>
+                              </td>
+
+                              {/* Action */}
+                              <td className="px-2 py-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemovePromoItem(item.id)}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                  title="從清單移除"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Tab 3: History & Active Campaigns */}
+              {promoModalTab === "history" && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <div>
@@ -9486,17 +9591,17 @@ function revertStockForOrders(orderIdsMap) {
             {/* Footer with Actions */}
             <div className="p-4 sm:p-5 border-t border-slate-100 bg-slate-50/80 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
               <div className="text-xs text-slate-500">
-                {promoModalTab === "create" ? (
+                {promoModalTab === "history" ? (
+                  <span>共 {savedPromotions.length} 筆促銷記錄</span>
+                ) : (
                   <span>
                     已選取 <strong>{selectedPromoItems.length}</strong> 款商品 • 有效期：
                     <strong className="text-rose-700 ml-1">{formatPromoDate(promoStartDate)} 至 {formatPromoDate(promoEndDate)}</strong>
                   </span>
-                ) : (
-                  <span>共 {savedPromotions.length} 筆促銷記錄</span>
                 )}
               </div>
 
-              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
                 <button
                   type="button"
                   onClick={() => setIsSalesPromoOpen(false)}
@@ -9506,8 +9611,52 @@ function revertStockForOrders(orderIdsMap) {
                   關閉
                 </button>
 
-                {promoModalTab === "create" && (
+                {promoModalTab === "selection" && (
                   <>
+                    <button
+                      type="button"
+                      onClick={() => setPromoModalTab("list")}
+                      className="py-2 px-4 rounded-xl border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold transition-all text-xs shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Tag className="w-3.5 h-3.5 text-rose-600" />
+                      <span>查看特價清單 ({selectedPromoItems.length})</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+
+                    {selectedPromoItems.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleSavePromotion}
+                        disabled={isSavingPromo}
+                        className="py-2 px-5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold transition-all text-xs shadow-md shadow-rose-200 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        {isSavingPromo ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>正在儲存...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-4 h-4" />
+                            <span>完成儲存 ({selectedPromoItems.length})</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {promoModalTab === "list" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setPromoModalTab("selection")}
+                      className="py-2 px-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 font-bold transition-all text-xs flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                      <span>返回商品選取 (Go Back)</span>
+                    </button>
+
                     {/* Export Simple PDF button */}
                     <button
                       type="button"
@@ -9544,6 +9693,17 @@ function revertStockForOrders(orderIdsMap) {
                       )}
                     </button>
                   </>
+                )}
+
+                {promoModalTab === "history" && (
+                  <button
+                    type="button"
+                    onClick={() => setPromoModalTab("selection")}
+                    className="py-2 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold transition-all text-xs shadow-sm flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>建立新促銷特價</span>
+                  </button>
                 )}
               </div>
             </div>
