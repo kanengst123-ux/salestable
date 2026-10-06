@@ -2518,14 +2518,29 @@ export default function App() {
   // Sales Promotion (銷售訊息) States & Handlers
   const [isSalesPromoOpen, setIsSalesPromoOpen] = useState<boolean>(false);
   const [promoSearchQuery, setPromoSearchQuery] = useState<string>("");
-  const [promoStartDate, setPromoStartDate] = useState<string>(() => {
-    return new Date().toISOString().slice(0, 10);
-  });
-  const [promoEndDate, setPromoEndDate] = useState<string>(() => {
+  
+  // Earliest date that can be chosen is the next day of the current date (tomorrow)
+  const getTomorrowDateStr = () => {
     const d = new Date();
-    d.setDate(d.getDate() + 3);
-    return d.toISOString().slice(0, 10);
-  });
+    d.setDate(d.getDate() + 1);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const getFutureDateStr = (daysAhead: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + daysAhead);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const [minPromoDate, setMinPromoDate] = useState<string>(() => getTomorrowDateStr());
+  const [promoStartDate, setPromoStartDate] = useState<string>(() => getTomorrowDateStr());
+  const [promoEndDate, setPromoEndDate] = useState<string>(() => getFutureDateStr(4));
   const [selectedPromoItems, setSelectedPromoItems] = useState<{
     id: string;
     name: string;
@@ -2654,6 +2669,10 @@ export default function App() {
       showToast("請選擇有效的促銷日期區間！");
       return;
     }
+    if (promoStartDate < minPromoDate) {
+      showToast(`促銷開始日期最早只能選擇明天 (${formatPromoDate(minPromoDate)})！`);
+      return;
+    }
     if (promoStartDate > promoEndDate) {
       showToast("開始日期不能晚於結束日期！");
       return;
@@ -2698,9 +2717,9 @@ export default function App() {
             return p;
           });
         });
-        showToast(`✅ 銷售訊息儲存成功！共 ${selectedPromoItems.length} 款商品特價已生效並同步至 Google Sheet raw 分頁 Col O (Price)！促銷期過後將自動還原。`);
+        showToast(`✅ 銷售訊息儲存成功！共 ${selectedPromoItems.length} 款商品特價已寫入 Google Sheet raw 分頁 Col O (Price)！`);
       } else {
-        showToast(`✅ 銷售訊息已成功排程！將於 ${formatPromoDate(promoStartDate)} 自動生效並同步至 Google Sheet raw 分頁 Col O (Price)。`);
+        showToast(`✅ 銷售訊息已成功排程！將於 ${formatPromoDate(promoStartDate)} 自動生效並寫入 Google Sheet raw 分頁 Col O (Price)。`);
       }
 
       fetchSavedPromotions();
@@ -2710,6 +2729,18 @@ export default function App() {
       showToast("儲存失敗：" + err.message);
     } finally {
       setIsSavingPromo(false);
+    }
+  };
+
+  const handleCompletePromotion = async (campaignId: string) => {
+    try {
+      const res = await fetch(`/api/sales-promotions/${campaignId}/complete`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "標記完成失敗");
+      showToast("已成功將促銷記錄標記為「已完成」(保持 Google Sheet Col O 當前售價)！");
+      fetchSavedPromotions();
+    } catch (err: any) {
+      showToast("標記完成失敗：" + err.message);
     }
   };
 
@@ -4576,6 +4607,10 @@ export default function App() {
                     {/* 2. 銷售訊息 (Next to 新增商品) */}
                     <button
                       onClick={() => {
+                        const tomorrow = getTomorrowDateStr();
+                        setMinPromoDate(tomorrow);
+                        setPromoStartDate(prev => (prev < tomorrow ? tomorrow : prev));
+                        setPromoEndDate(prev => (prev < tomorrow ? getFutureDateStr(4) : prev));
                         fetchSavedPromotions();
                         setPromoModalTab("selection");
                         setIsSalesPromoOpen(true);
@@ -9016,15 +9051,33 @@ function revertStockForOrders(orderIdsMap) {
                       <div className="flex items-center gap-1.5 font-mono text-xs">
                         <input
                           type="date"
+                          min={minPromoDate}
                           value={promoStartDate}
-                          onChange={(e) => setPromoStartDate(e.target.value)}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val && val < minPromoDate) {
+                              setPromoStartDate(minPromoDate);
+                              showToast(`最早只能選擇明天 (${formatPromoDate(minPromoDate)})！`);
+                            } else {
+                              setPromoStartDate(val);
+                              if (promoEndDate < val) setPromoEndDate(val);
+                            }
+                          }}
                           className="px-2 py-1 rounded-lg border border-slate-200 bg-white font-bold text-slate-800 text-xs focus:ring-2 focus:ring-rose-500 focus:outline-hidden shadow-2xs"
                         />
                         <span className="text-slate-400 font-bold text-xs">至</span>
                         <input
                           type="date"
+                          min={promoStartDate || minPromoDate}
                           value={promoEndDate}
-                          onChange={(e) => setPromoEndDate(e.target.value)}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val && val < (promoStartDate || minPromoDate)) {
+                              setPromoEndDate(promoStartDate || minPromoDate);
+                            } else {
+                              setPromoEndDate(val);
+                            }
+                          }}
                           className="px-2 py-1 rounded-lg border border-slate-200 bg-white font-bold text-slate-800 text-xs focus:ring-2 focus:ring-rose-500 focus:outline-hidden shadow-2xs"
                         />
                       </div>
@@ -9042,11 +9095,18 @@ function revertStockForOrders(orderIdsMap) {
                           key={preset.label}
                           type="button"
                           onClick={() => {
-                            const today = new Date();
-                            const end = new Date();
-                            end.setDate(today.getDate() + preset.days);
-                            setPromoStartDate(today.toISOString().slice(0, 10));
-                            setPromoEndDate(end.toISOString().slice(0, 10));
+                            const start = new Date();
+                            start.setDate(start.getDate() + 1);
+                            const end = new Date(start);
+                            end.setDate(start.getDate() + preset.days - 1);
+                            const y1 = start.getFullYear();
+                            const m1 = String(start.getMonth() + 1).padStart(2, '0');
+                            const d1 = String(start.getDate()).padStart(2, '0');
+                            const y2 = end.getFullYear();
+                            const m2 = String(end.getMonth() + 1).padStart(2, '0');
+                            const d2 = String(end.getDate()).padStart(2, '0');
+                            setPromoStartDate(`${y1}-${m1}-${d1}`);
+                            setPromoEndDate(`${y2}-${m2}-${d2}`);
                           }}
                           className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white hover:bg-rose-50 hover:text-rose-700 text-slate-600 border border-slate-200 transition-colors cursor-pointer shadow-2xs"
                         >
@@ -9055,17 +9115,8 @@ function revertStockForOrders(orderIdsMap) {
                       ))}
 
                       {(() => {
-                        const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(new Date());
-                        const isTodayInRange = promoStartDate <= todayStr && todayStr <= promoEndDate;
-                        const isPast = todayStr > promoEndDate;
-                        if (isTodayInRange) {
-                          return (
-                            <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                              今日即時生效
-                            </span>
-                          );
-                        } else if (isPast) {
+                        const isPast = minPromoDate > promoEndDate;
+                        if (isPast) {
                           return (
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800">
                               已過期
@@ -9073,8 +9124,9 @@ function revertStockForOrders(orderIdsMap) {
                           );
                         } else {
                           return (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-100 text-blue-800">
-                              🕒 排程中
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-100 text-blue-800 flex items-center gap-1">
+                              <span>🕒 排程特價</span>
+                              <span className="text-[9px] text-blue-600">({formatPromoDate(promoStartDate)} 起生效)</span>
                             </span>
                           );
                         }
@@ -9422,8 +9474,7 @@ function revertStockForOrders(orderIdsMap) {
                   ) : (
                     <div className="space-y-3">
                       {savedPromotions.map((camp: any) => {
-                        const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(new Date());
-                        const isActive = camp.status === "active";
+                        const isCompleted = camp.status === "completed" || camp.status === "active";
                         const isReverted = camp.status === "reverted";
                         const isExpired = camp.status === "expired";
                         const isScheduled = camp.status === "scheduled";
@@ -9431,33 +9482,41 @@ function revertStockForOrders(orderIdsMap) {
                         return (
                           <div
                             key={camp.id}
-                            className={`p-4 rounded-2xl border transition-all ${
-                              isActive
-                                ? "bg-rose-50/40 border-rose-200 shadow-xs"
+                            className={`p-3.5 sm:p-4 rounded-2xl border transition-all ${
+                              isCompleted
+                                ? "bg-emerald-50/50 border-emerald-200 shadow-xs"
+                                : isScheduled
+                                ? "bg-blue-50/40 border-blue-200"
                                 : isReverted
                                 ? "bg-slate-50/60 border-slate-200 opacity-80"
                                 : "bg-white border-slate-200"
                             }`}
                           >
                             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full ${
-                                  isActive
-                                    ? "bg-rose-600 text-white animate-pulse"
+                                  isCompleted
+                                    ? "bg-emerald-600 text-white shadow-2xs"
                                     : isScheduled
                                     ? "bg-blue-100 text-blue-800"
                                     : isReverted
                                     ? "bg-slate-200 text-slate-600"
                                     : "bg-amber-100 text-amber-800"
                                 }`}>
-                                  {isActive ? "⚡ 進行中 (已寫入 Col O)" : isScheduled ? "🕒 排程中" : isReverted ? "↩ 已手動還原" : "✓ 已結束還原"}
+                                  {isCompleted
+                                    ? "✓ 已完成 (已寫入Col O)"
+                                    : isScheduled
+                                    ? `🕒 排程中 (將於生效日 ${formatPromoDate(camp.startDate)} 寫入Col O)`
+                                    : isReverted
+                                    ? "↩ 已還原原價 (已寫入Col O)"
+                                    : "✓ 促銷期結束 (已還原)"}
                                 </span>
                                 <span className="font-mono text-xs font-bold text-slate-700">
                                   {formatPromoDate(camp.startDate)} 至 {formatPromoDate(camp.endDate)}
                                 </span>
                               </div>
 
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <button
                                   type="button"
                                   onClick={() => handleGeneratePromoPdf(camp.items.map((it: any) => ({
@@ -9472,12 +9531,12 @@ function revertStockForOrders(orderIdsMap) {
                                   <span>匯出 PDF</span>
                                 </button>
 
-                                {isActive && (
+                                {isCompleted && (
                                   <button
                                     type="button"
                                     onClick={() => handleRevertPromotion(camp.id)}
                                     className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold cursor-pointer shadow-2xs"
-                                    title="手動提前結束促銷並恢復 Google Sheet 原價"
+                                    title="提前結束促銷並恢復 Google Sheet 原價"
                                   >
                                     提前還原原價
                                   </button>

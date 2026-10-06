@@ -695,13 +695,27 @@ export interface SalesPromotionCampaign {
   endDate: string;   // "YYYY-MM-DD"
   createdAt: string;
   items: PromoCampaignItem[];
-  status: "active" | "scheduled" | "expired" | "reverted";
+  status: "active" | "scheduled" | "expired" | "reverted" | "completed";
 }
 
 function getSalesPromotions(): SalesPromotionCampaign[] {
   try {
     if (fs.existsSync(PROMOTIONS_FILE)) {
-      return JSON.parse(fs.readFileSync(PROMOTIONS_FILE, "utf-8"));
+      const campaigns: SalesPromotionCampaign[] = JSON.parse(fs.readFileSync(PROMOTIONS_FILE, "utf-8"));
+      let modified = false;
+      for (const c of campaigns) {
+        // Any campaign that has been written to Google Sheet Col O or marked active is completed
+        if (c.status === "active") {
+          c.status = "completed";
+          modified = true;
+        }
+      }
+      if (modified) {
+        try {
+          fs.writeFileSync(PROMOTIONS_FILE, JSON.stringify(campaigns, null, 2));
+        } catch (e) {}
+      }
+      return campaigns;
     }
   } catch (error) {
     console.error("Failed to read promotions file:", error);
@@ -790,13 +804,12 @@ function checkAndApplyPromotions() {
   let localProducts = getLocalProducts();
 
   for (const camp of campaigns) {
-    if (camp.status === "reverted") continue;
+    if (camp.status === "reverted" || camp.status === "completed") continue;
 
     const isWithinRange = camp.startDate <= todayStr && todayStr <= camp.endDate;
     const isPastRange = todayStr > camp.endDate;
 
     if (isWithinRange) {
-      camp.status = "active";
       for (const item of camp.items) {
         if (!item.applied) {
           const priceStr = String(item.promoPrice);
@@ -806,6 +819,8 @@ function checkAndApplyPromotions() {
           console.log(`[Sales Promo Applied]: ${item.productName} (${item.productId}) price set to ${priceStr}`);
         }
       }
+      camp.status = "completed"; // Changes have been written to Google Sheet Col O!
+      hasChanges = true;
     } else if (isPastRange) {
       camp.status = "expired";
       for (const item of camp.items) {
@@ -868,6 +883,21 @@ app.post("/api/sales-promotions", (req, res) => {
     const campaigns = getSalesPromotions();
     const now = new Date();
     const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(now);
+    
+    // Earliest selectable start date is tomorrow (next day of current date)
+    const tomorrowDate = new Date();
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrowStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(tomorrowDate);
+
+    // Also support local calendar day tomorrow
+    const tomorrowLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const tomorrowLocalStr = `${tomorrowLocal.getFullYear()}-${String(tomorrowLocal.getMonth() + 1).padStart(2, '0')}-${String(tomorrowLocal.getDate()).padStart(2, '0')}`;
+    const minSelectableDate = tomorrowStr < tomorrowLocalStr ? tomorrowStr : tomorrowLocalStr;
+
+    if (startDate < minSelectableDate && startDate <= todayStr) {
+      return res.status(400).json({ error: `促銷開始日期最早只能選擇明天 (${minSelectableDate})` });
+    }
+
     const isWithinRange = startDate <= todayStr && todayStr <= endDate;
     let localProducts = getLocalProducts();
 
@@ -892,7 +922,7 @@ app.post("/api/sales-promotions", (req, res) => {
       endDate,
       createdAt: now.toISOString(),
       items: campaignItems,
-      status: isWithinRange ? "active" : (todayStr > endDate ? "expired" : "scheduled")
+      status: isWithinRange ? "completed" : (todayStr > endDate ? "expired" : "scheduled")
     };
 
     if (isWithinRange) {
@@ -901,6 +931,7 @@ app.post("/api/sales-promotions", (req, res) => {
         it.applied = true;
         console.log(`[Sales Promo Applied immediately]: ${it.productName} -> ${it.promoPrice}`);
       }
+      newCampaign.status = "completed"; // Changes have been written to Google Sheet Col O!
       saveLocalProducts(localProducts);
     }
 
@@ -935,6 +966,23 @@ app.post("/api/sales-promotions/:id/revert", (req, res) => {
     saveLocalProducts(localProducts);
     saveSalesPromotions(campaigns);
 
+    res.json({ success: true, campaign: camp });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/sales-promotions/:id/complete", (req, res) => {
+  try {
+    const { id } = req.params;
+    const campaigns = getSalesPromotions();
+    const camp = campaigns.find(c => c.id === id);
+    if (!camp) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    camp.status = "completed";
+    saveSalesPromotions(campaigns);
     res.json({ success: true, campaign: camp });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

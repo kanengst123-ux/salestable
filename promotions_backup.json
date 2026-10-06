@@ -1,1 +1,18 @@
-[]
+[
+  {
+    "id": "promo-1791295911978",
+    "startDate": "2026-10-05",
+    "endDate": "2026-10-09",
+    "createdAt": "2026-10-06T14:11:51.956Z",
+    "items": [
+      {
+        "productId": "id-5191056456810496",
+        "productName": "KAO潔霸洗衣粉​綠色 ​獨有酵素 6/箱",
+        "originalPrice": "38",
+        "promoPrice": "38",
+        "applied": true
+      }
+    ],
+    "status": "completed"
+  }
+]
