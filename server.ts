@@ -632,7 +632,8 @@ async function triggerSheetsSync(
   quantityFrom?: string | number,
   quantityTo?: string | number,
   net?: number,
-  date?: string
+  date?: string,
+  list?: string
 ) {
   const settings = getSheetSettings();
   if (settings.enabled && settings.appsScriptUrl) {
@@ -644,11 +645,13 @@ async function triggerSheetsSync(
         price, 
         quantity, 
         remarks, 
+        categories: remarks,
         priceA, 
         priceB, 
         priceC, 
         categorySymbol, 
-        showOnPdf 
+        showOnPdf: showOnPdf !== undefined ? showOnPdf : "0",
+        list: list !== undefined ? list : "0"
       };
 
       // Include stock change log fields for 'Purchase' tab if stock level was changed
@@ -1161,10 +1164,14 @@ function getSymbolForCategoryName(catName: string, symbolToName: Record<string, 
 
 app.post("/api/products", async (req, res) => {
   try {
-    const { id, name, price, quantity, remarks, base64Image, category, showOnPdf } = req.body;
+    const { id, name, price, quantity, remarks, categories, base64Image, category, showOnPdf } = req.body;
     if (!name) {
       return res.status(400).json({ error: "Name is required" });
     }
+
+    const finalRemarks = (remarks !== undefined && remarks !== null) 
+      ? String(remarks) 
+      : ((categories !== undefined && categories !== null) ? String(categories) : "");
 
     const finalId = id ? id.trim() : `id-${Math.floor(1000000000000000 + Math.random() * 9000000000000000)}`;
 
@@ -1194,17 +1201,20 @@ app.post("/api/products", async (req, res) => {
       console.error("Error determining category for manual add:", e);
     }
 
-    const showOnPdfVal = (showOnPdf === false || showOnPdf === "N") ? "N" : "0";
+    // Per user instruction: When '建立商品' is pressed, input '0' to Col AE ('show of pdf') and Col AF ('list')
+    const showOnPdfVal = "0";
+    const listVal = "0";
 
-    const allVals = new Array(31).fill("");
+    const allVals = new Array(33).fill("");
     allVals[1] = finalId;
     allVals[2] = name;
-    allVals[12] = remarks || "";
+    allVals[12] = finalRemarks || ""; // Col M (13th column, 0-indexed: 12, Header: Categories)
     allVals[14] = price || "0";
     allVals[27] = (isNaN(qtyNumber) || quantity === "") ? "1" : "0";
     allVals[28] = secondaryStockCount;
     allVals[29] = "";
-    allVals[30] = showOnPdfVal;
+    allVals[30] = showOnPdfVal; // Col AE (31st column): Header as 'show of pdf' -> '0'
+    allVals[31] = listVal;       // Col AF (32nd column): Header as 'list' -> '0'
 
     const newProduct = {
       id: finalId,
@@ -1214,10 +1224,13 @@ app.post("/api/products", async (req, res) => {
       alwaysStock: isNaN(qtyNumber) || quantity === "",
       secondaryStockCount,
       extraAttributes: {
-        "Categories": remarks || "Local Additions",
-        "Merchant Remark": remarks || "",
-        "remarks": remarks || "",
-        "show on pdf": showOnPdfVal
+        "Categories": finalRemarks || "",
+        "Categories/分類": finalRemarks || "",
+        "Merchant Remark": finalRemarks || "",
+        "remarks": finalRemarks || "",
+        "show on pdf": showOnPdfVal,
+        "show of pdf": showOnPdfVal,
+        "list": listVal
       },
       costCategorySymbol: catSymbol,
       costCategoryName: catName,
@@ -1228,8 +1241,26 @@ app.post("/api/products", async (req, res) => {
     localProducts.unshift(newProduct);
     saveLocalProducts(localProducts);
 
-    // Sync to Google Sheet if enabled - we pass catSymbol as the 10th parameter and showOnPdfVal as 11th parameter
-    triggerSheetsSync(finalId, name, price || "0", quantity, remarks || "", "addProduct", undefined, undefined, undefined, catSymbol, showOnPdfVal);
+    // Sync to Google Sheet if enabled - we pass catSymbol as 10th parameter, showOnPdfVal ("0") as 11th parameter, and listVal ("0") as 17th parameter
+    triggerSheetsSync(
+      finalId, 
+      name, 
+      price || "0", 
+      quantity, 
+      finalRemarks || "", 
+      "addProduct", 
+      undefined, 
+      undefined, 
+      undefined, 
+      catSymbol, 
+      showOnPdfVal,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      listVal
+    );
 
     res.json({ success: true, product: newProduct });
   } catch (error: any) {
@@ -1395,8 +1426,9 @@ app.post("/api/products/batch-restock", async (req, res) => {
 app.put("/api/products/:id", (req, res) => {
   try {
     const { id } = req.params;
-    const { name, price, priceA, priceB, priceC, quantity, remarks, base64Image, showOnPdf, stockChanged, quantityFrom, quantityTo, net, changeDate } = req.body;
-    console.log(`[PUT /api/products/${id}] Received body:`, { name, price, priceA, priceB, priceC, quantity, remarks, showOnPdf, stockChanged, quantityFrom, quantityTo, net });
+    const { name, price, priceA, priceB, priceC, quantity, remarks, categories, base64Image, showOnPdf, stockChanged, quantityFrom, quantityTo, net, changeDate } = req.body;
+    const finalRemarks = remarks !== undefined ? remarks : (categories !== undefined ? categories : undefined);
+    console.log(`[PUT /api/products/${id}] Received body:`, { name, price, priceA, priceB, priceC, quantity, remarks: finalRemarks, showOnPdf, stockChanged, quantityFrom, quantityTo, net });
     if (!name) {
       return res.status(400).json({ error: "Name is required" });
     }
@@ -1493,12 +1525,12 @@ app.put("/api/products/:id", (req, res) => {
 
     if (existingIndex !== -1) {
       const updatedAllValues = [...(localProducts[existingIndex].allValues || [])];
-      while (updatedAllValues.length < 31) {
+      while (updatedAllValues.length < 33) {
         updatedAllValues.push("");
       }
       updatedAllValues[2] = name;
-      if (remarks !== undefined) {
-        updatedAllValues[12] = remarks;
+      if (finalRemarks !== undefined) {
+        updatedAllValues[12] = finalRemarks; // Col M (Header: Categories)
       }
       updatedAllValues[14] = finalPrice;
       updatedAllValues[17] = finalPriceA;
@@ -1522,7 +1554,7 @@ app.put("/api/products/:id", (req, res) => {
         secondaryStockCount,
         extraAttributes: {
           ...localProducts[existingIndex].extraAttributes,
-          ...(remarks !== undefined ? { "Categories": remarks, "Merchant Remark": remarks, "remarks": remarks } : {}),
+          ...(finalRemarks !== undefined ? { "Categories": finalRemarks, "Categories/分類": finalRemarks, "Merchant Remark": finalRemarks, "remarks": finalRemarks } : {}),
           ...(showOnPdfVal !== undefined ? { "show on pdf": showOnPdfVal } : {})
         },
         allValues: updatedAllValues
@@ -1540,12 +1572,12 @@ app.put("/api/products/:id", (req, res) => {
       }
 
       const updatedAllValues = [...(sheetProduct?.allValues || [])];
-      while (updatedAllValues.length < 31) {
+      while (updatedAllValues.length < 33) {
         updatedAllValues.push("");
       }
       updatedAllValues[2] = name;
-      if (remarks !== undefined) {
-        updatedAllValues[12] = remarks;
+      if (finalRemarks !== undefined) {
+        updatedAllValues[12] = finalRemarks; // Col M (Header: Categories)
       }
       updatedAllValues[14] = finalPrice;
       updatedAllValues[17] = finalPriceA;
@@ -1569,7 +1601,7 @@ app.put("/api/products/:id", (req, res) => {
         secondaryStockCount,
         extraAttributes: {
           ...(sheetProduct?.extraAttributes || {}),
-          ...(remarks !== undefined ? { "Categories": remarks, "Merchant Remark": remarks, "remarks": remarks } : {}),
+          ...(finalRemarks !== undefined ? { "Categories": finalRemarks, "Categories/分類": finalRemarks, "Merchant Remark": finalRemarks, "remarks": finalRemarks } : {}),
           ...(showOnPdfVal !== undefined ? { "show on pdf": showOnPdfVal } : {})
         },
         allValues: updatedAllValues
@@ -1586,7 +1618,7 @@ app.put("/api/products/:id", (req, res) => {
       name, 
       finalPrice, 
       quantity, 
-      remarks || "", 
+      finalRemarks !== undefined ? finalRemarks : (remarks || ""), 
       "updateProduct", 
       finalPriceA, 
       finalPriceB, 

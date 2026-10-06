@@ -1803,20 +1803,31 @@ export default function App() {
               }
 
               // 4. Price Tag at the space UNDER Product Name (not inside the picture)
+              // User requirement: "regarding the pdf, make the number bigger but keep the layout intact (16 tiles per page)"
               const priceVal = parseFloat(getProductPrice(p));
               const priceStr = priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : (fontAdded ? "請詢價" : "Inquire");
 
-              doc.setFontSize(9.5);
+              // Significantly enlarged font size for price numbers (from 9.5pt to 15.0pt)
+              let priceFontSize = 15.0;
               if (fontAdded) {
                 doc.setFont("NotoSansTC", "bold");
               } else {
                 doc.setFont("helvetica", "bold");
               }
-              const pWidth = doc.getTextWidth(priceStr);
-              const badgeW = Math.max(20, pWidth + 3.4);
-              const badgeH = 5.0;
+              doc.setFontSize(priceFontSize);
+              let pWidth = doc.getTextWidth(priceStr);
+
+              // Auto-scale font down if the price string is unusually wide so it never exceeds card width
+              while (pWidth > (maxTextWidth - 4.0) && priceFontSize > 10.0) {
+                priceFontSize -= 0.5;
+                doc.setFontSize(priceFontSize);
+                pWidth = doc.getTextWidth(priceStr);
+              }
+
+              const badgeW = Math.min(maxTextWidth, Math.max(26, pWidth + 4.8));
+              const badgeH = 7.6;
               const badgeX = textX;
-              const badgeY = cy + cardH - badgeH - 1.5;
+              const badgeY = cy + cardH - badgeH - 1.2;
 
               // Clean price tag badge with subtle border
               if (isOutOfStock) {
@@ -1826,15 +1837,15 @@ export default function App() {
                 doc.setFillColor(248, 250, 252);
                 doc.setDrawColor(203, 213, 225);
               }
-              doc.setLineWidth(0.2);
-              doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.0, 1.0, "FD");
+              doc.setLineWidth(0.3);
+              doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.2, 1.2, "FD");
 
               if (isOutOfStock) {
                 doc.setTextColor(156, 163, 175);
               } else {
                 doc.setTextColor(15, 23, 42);
               }
-              doc.text(priceStr, badgeX + 1.7, badgeY + 3.5);
+              doc.text(priceStr, badgeX + 2.2, badgeY + 5.5);
               if (fontAdded) {
                 doc.setFont("NotoSansTC", "normal");
               }
@@ -2980,9 +2991,11 @@ export default function App() {
         price: newProductPrice.trim() || "0",
         quantity: newProductQuantity.trim(),
         remarks: newProductRemarks.trim(),
+        categories: newProductRemarks.trim(),
         base64Image: newProductImagePreview,
         category: newProductCategory,
-        showOnPdf: newProductShowOnPdf
+        showOnPdf: "0",
+        list: "0"
       };
 
       const res = await fetch("/api/products", {
@@ -2996,7 +3009,7 @@ export default function App() {
         throw new Error(errorData.error || "Failed to create product");
       }
 
-      showToast(`Product "${newProductName.substring(0, 15)}..." added successfully!`);
+      showToast(`商品「${newProductName.substring(0, 15)}」建立成功！Google Sheet 'raw' 已寫入 (Col M Categories, Col AE=0, Col AF=0)`);
       setIsAddProductOpen(false);
       
       // Reset form
@@ -3091,6 +3104,7 @@ export default function App() {
         priceC: finalPriceC,
         quantity: editProductQuantity.trim(),
         remarks: editProductRemarks.trim(),
+        categories: editProductRemarks.trim(),
         base64Image: editProductImagePreview.startsWith("data:image") ? editProductImagePreview : undefined,
         showOnPdf: editProductShowOnPdf,
         stockChanged: isStockChanged,
@@ -3128,11 +3142,11 @@ export default function App() {
       const qtyNumber = parseInt(editProductQuantity.trim(), 10);
       const hasStock = isNaN(qtyNumber) ? true : qtyNumber > 0;
       const updatedAllValues = [...(selectedProduct.allValues || [])];
-      while (updatedAllValues.length < 31) {
+      while (updatedAllValues.length < 33) {
         updatedAllValues.push("");
       }
       updatedAllValues[2] = editProductName.trim();
-      updatedAllValues[12] = editProductRemarks.trim();
+      updatedAllValues[12] = editProductRemarks.trim(); // Col M (13th column, Header: Categories)
       updatedAllValues[14] = finalPrice;
       updatedAllValues[17] = finalPriceA;
       updatedAllValues[18] = finalPriceB;
@@ -3141,7 +3155,7 @@ export default function App() {
       updatedAllValues[28] = isNaN(qtyNumber) ? "" : qtyNumber.toString();
       updatedAllValues[30] = showPdfStr;
 
-      setSelectedProduct({
+      const updatedProductObj: Product = {
         ...selectedProduct,
         name: editProductName.trim(),
         price: finalPrice,
@@ -3153,13 +3167,17 @@ export default function App() {
         secondaryStockCount: isNaN(qtyNumber) ? "" : qtyNumber.toString(),
         extraAttributes: {
           ...selectedProduct.extraAttributes,
-          "Categories": editProductRemarks.trim() || selectedProduct.extraAttributes?.["Categories"] || "",
+          "Categories": editProductRemarks.trim(),
+          "Categories/分類": editProductRemarks.trim(),
           "Merchant Remark": editProductRemarks.trim(),
           "remarks": editProductRemarks.trim(),
           "show on pdf": showPdfStr
         },
         allValues: updatedAllValues
-      });
+      };
+
+      setSelectedProduct(updatedProductObj);
+      setProducts(prev => prev.map(p => p.id === selectedProduct.id ? updatedProductObj : p));
     } catch (err: any) {
       console.error(err);
       showToast(`Error: ${err.message || "Failed to update product"}`);
@@ -3168,28 +3186,49 @@ export default function App() {
     }
   };
 
-  const handleStartEditing = () => {
-    if (!selectedProduct) return;
-    setEditProductName(selectedProduct.name);
-    setEditProductPrice(selectedProduct.price || "");
-    setEditProductPriceA(selectedProduct.priceA !== undefined && selectedProduct.priceA !== "" ? selectedProduct.priceA : (selectedProduct.price || ""));
-    setEditProductPriceB(selectedProduct.priceB !== undefined && selectedProduct.priceB !== "" ? selectedProduct.priceB : (selectedProduct.price || ""));
-    setEditProductPriceC(selectedProduct.priceC !== undefined && selectedProduct.priceC !== "" ? selectedProduct.priceC : (selectedProduct.price || ""));
-    setEditProductQuantity(selectedProduct.alwaysStock ? "" : (selectedProduct.secondaryStockCount || ""));
-    setEditProductRemarks(
-      selectedProduct.extraAttributes?.["Merchant Remark"] || 
-      selectedProduct.extraAttributes?.["remarks"] || 
-      (selectedProduct.allValues ? selectedProduct.allValues[12] : "") || 
-      selectedProduct.extraAttributes?.["Categories"] || 
-      ""
-    );
+  // Helper to extract Col M (Header: Categories) of the 'raw' tab of Google Sheet
+  const getProductColMCategories = (prod: any): string => {
+    if (!prod) return "";
+    // 1. Check raw array Col M (index 12, 13th column of 'raw' tab)
+    if (prod.allValues && prod.allValues[12] !== undefined && prod.allValues[12] !== null) {
+      const val = String(prod.allValues[12]);
+      if (val.trim()) return val;
+    }
+    // 2. Check extraAttributes with Header 'Categories'
+    if (prod.extraAttributes?.["Categories"] !== undefined && prod.extraAttributes?.["Categories"] !== null) {
+      const val = String(prod.extraAttributes["Categories"]);
+      if (val.trim()) return val;
+    }
+    if (prod.extraAttributes?.["Categories/分類"] !== undefined && prod.extraAttributes?.["Categories/分類"] !== null) {
+      const val = String(prod.extraAttributes["Categories/分類"]);
+      if (val.trim()) return val;
+    }
+    // 3. Fallback to Merchant Remark or remarks if set
+    return prod.extraAttributes?.["Merchant Remark"] || prod.extraAttributes?.["remarks"] || "";
+  };
+
+  const handleStartEditing = (targetProd?: Product) => {
+    const prod = targetProd || selectedProduct;
+    if (!prod) return;
+    if (targetProd) {
+      setSelectedProduct(targetProd);
+    }
+    setEditProductName(prod.name);
+    setEditProductPrice(prod.price || "");
+    setEditProductPriceA(prod.priceA !== undefined && prod.priceA !== "" ? prod.priceA : (prod.price || ""));
+    setEditProductPriceB(prod.priceB !== undefined && prod.priceB !== "" ? prod.priceB : (prod.price || ""));
+    setEditProductPriceC(prod.priceC !== undefined && prod.priceC !== "" ? prod.priceC : (prod.price || ""));
+    setEditProductQuantity(prod.alwaysStock ? "" : (prod.secondaryStockCount || ""));
+    // Per user instruction: When product edit tab is opened, at '備註 / 商家備註' text box, load content of Col M (Header: Categories) of 'raw' tab
+    setEditProductRemarks(getProductColMCategories(prod));
     setEditProductImageFile(null);
     setEditProductImagePreview(""); // resets preview
 
     const showPdfRaw = (
-      selectedProduct.extraAttributes?.["show on pdf"] ||
-      selectedProduct.extraAttributes?.["show on pdf "] ||
-      (selectedProduct.allValues ? selectedProduct.allValues[30] : "") ||
+      prod.extraAttributes?.["show on pdf"] ||
+      prod.extraAttributes?.["show of pdf"] ||
+      prod.extraAttributes?.["show on pdf "] ||
+      (prod.allValues ? prod.allValues[30] : "") ||
       ""
     ).trim().toUpperCase();
     setEditProductShowOnPdf(showPdfRaw !== "N");
@@ -4292,20 +4331,7 @@ export default function App() {
                             <td className="px-4 py-2 text-center">
                               <button
                                 onClick={() => {
-                                  setSelectedProduct(prod);
-                                  // Wait tiny tick, then edit
-                                  setTimeout(() => {
-                                    setEditProductName(prod.name);
-                                    setEditProductPrice(prod.price || "");
-                                    setEditProductPriceA(prod.priceA !== undefined && prod.priceA !== "" ? prod.priceA : (prod.price || ""));
-                                    setEditProductPriceB(prod.priceB !== undefined && prod.priceB !== "" ? prod.priceB : (prod.price || ""));
-                                    setEditProductPriceC(prod.priceC !== undefined && prod.priceC !== "" ? prod.priceC : (prod.price || ""));
-                                    setEditProductQuantity(prod.alwaysStock ? "" : (prod.secondaryStockCount || ""));
-                                    setEditProductRemarks(prod.extraAttributes?.["Merchant Remark"] || prod.extraAttributes?.["remarks"] || "");
-                                    setEditProductImageFile(null);
-                                    setEditProductImagePreview("");
-                                    setIsEditingSelectedProduct(true);
-                                  }, 30);
+                                  handleStartEditing(prod);
                                 }}
                                 className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-all font-bold text-[10px] inline-flex items-center gap-1.5 cursor-pointer"
                               >
@@ -5477,16 +5503,25 @@ export default function App() {
 
                     {/* Remarks Input */}
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                        備註 / 商家備註
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                          備註 / 商家備註
+                        </label>
+                        <span className="text-[10px] text-indigo-600 font-semibold bg-indigo-50 border border-indigo-200/60 px-2 py-0.5 rounded-md">
+                          Col M (Categories)
+                        </span>
+                      </div>
                       <textarea 
-                        placeholder="描述具體細節、特殊規格、優惠或代碼"
+                        id="edit-product-remarks-textarea"
+                        placeholder="描述具體細節、特殊規格、優惠或分類代碼 (Col M: Categories)"
                         value={editProductRemarks}
                         onChange={(e) => setEditProductRemarks(e.target.value)}
                         rows={3}
-                        className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3.5 py-2.5 text-xs transition-all outline-none resize-none"
+                        className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3.5 py-2.5 text-xs transition-all outline-none resize-none font-medium leading-relaxed"
                       />
+                      <p className="text-[11px] text-slate-400 mt-1 leading-normal">
+                        載入自 Google Sheet <strong>raw</strong> 分頁的 <strong>Col M (Header: Categories)</strong>，可在此編輯修改，儲存後將同步寫入 Google Sheet。
+                      </p>
                     </div>
 
                     {/* Show on PDF Toggle (Col AE) */}
@@ -5703,10 +5738,10 @@ export default function App() {
                             <span className="text-indigo-600 font-medium">{selectedProduct.extraAttributes["Hashtags"]}</span>
                           </div>
                         )}
-                        {selectedProduct.extraAttributes["Merchant Remark"] && (
+                        {getProductColMCategories(selectedProduct) && (
                           <div className="col-span-2 pt-1.5 border-t border-slate-100/60">
-                            <span className="text-slate-400 block font-medium">商品說明 / 備註：</span>
-                            <p className="text-slate-650 text-[11px] leading-relaxed italic">{selectedProduct.extraAttributes["Merchant Remark"]}</p>
+                            <span className="text-slate-400 block font-medium">備註 / 商家分類 (Col M Categories)：</span>
+                            <p className="text-slate-700 text-xs font-semibold leading-relaxed mt-0.5">{getProductColMCategories(selectedProduct)}</p>
                           </div>
                         )}
                       </div>
@@ -6658,56 +6693,44 @@ export default function App() {
 
                 {/* Remarks */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    特別備註 / 產品備註
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      特別備註 / 產品備註
+                    </label>
+                    <span className="text-[10px] text-indigo-600 font-semibold bg-indigo-50 border border-indigo-200/60 px-2 py-0.5 rounded-md">
+                      Col M (Categories)
+                    </span>
+                  </div>
                   <textarea 
                     placeholder="可輸入詳細規格、尺碼說明、特別優惠或條款..."
                     value={newProductRemarks}
                     onChange={(e) => setNewProductRemarks(e.target.value)}
                     rows={3}
-                    className="w-full bg-slate-50 border border-slate-200 focus:border-slate-400 focus:bg-white text-slate-900 rounded-xl px-3.5 py-2.5 text-xs transition-all outline-none resize-none"
+                    className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:bg-white text-slate-900 rounded-xl px-3.5 py-2.5 text-xs transition-all outline-none resize-none font-medium leading-relaxed"
                   />
+                  <p className="text-[11px] text-slate-400 mt-1 leading-normal">
+                    建立商品後將自動寫入 Google Sheet <strong>raw</strong> 分頁的 <strong>Col M (Header: Categories)</strong>。
+                  </p>
                 </div>
 
-                {/* Show on PDF Toggle (Col AE) */}
-                <div className="bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/80 flex items-center justify-between transition-all">
-                  <div className="flex items-start gap-2.5 pr-2">
-                    <div className={`p-2 rounded-xl mt-0.5 ${newProductShowOnPdf ? "bg-indigo-100 text-indigo-700" : "bg-slate-200 text-slate-500"}`}>
-                      <FileText className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <label className="text-xs font-bold text-slate-800">
-                          在 PDF 目錄中顯示
-                        </label>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          Col AE (show on PDF)
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">
-                        {newProductShowOnPdf 
-                          ? "已開啟：此新商品將包含在導出的 PDF 目錄中 (Col AE = 0)" 
-                          : "已關閉：此新商品將從 PDF 目錄中隱藏排除 (Col AE = N)"}
-                      </p>
-                    </div>
+                {/* Google Sheet Sync Specification Notice (Col AE & Col AF) */}
+                <div className="bg-slate-50/90 p-3.5 rounded-2xl border border-slate-200/80 flex items-start gap-2.5 transition-all">
+                  <div className="p-2 rounded-xl mt-0.5 bg-emerald-50 text-emerald-700 border border-emerald-100 shrink-0">
+                    <Check className="w-4 h-4" />
                   </div>
-
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={newProductShowOnPdf}
-                    onClick={() => setNewProductShowOnPdf(!newProductShowOnPdf)}
-                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                      newProductShowOnPdf ? "bg-indigo-600" : "bg-slate-300"
-                    }`}
-                  >
-                    <span
-                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                        newProductShowOnPdf ? "translate-x-5" : "translate-x-0"
-                      }`}
-                    />
-                  </button>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-bold text-slate-800">
+                        Google 試算表 'raw' 分頁同步設定
+                      </span>
+                      <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/70 border border-emerald-200 px-1.5 py-0.5 rounded">
+                        自動寫入 Col M / AE / AF
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 leading-snug">
+                      點擊「建立商品」後，Google 試算表 <strong>raw</strong> 分頁將自動新增此列，並在 <strong>Col M（Categories）</strong> 寫入「特別備註 / 產品備註」，以及在 <strong>Col AE（show of pdf）</strong> 和 <strong>Col AF（list）</strong> 自動寫入 <strong>0</strong>。
+                    </p>
+                  </div>
                 </div>
 
               </div>
@@ -6881,6 +6904,20 @@ function doPost(e) {
         sheet.getRange(rowToUpdate, 2).setValue(id || "");  // Col B: SKU / ID
         sheet.getRange(rowToUpdate, 3).setValue(name || ""); // Col C: Product Name
         sheet.getRange(rowToUpdate, 4).setValue(id || "");  // Col D: Metadata / SKU ID
+
+        // Ensure headers for Col M ('Categories'), Col AE ('show of pdf') and Col AF ('list') in row 1 if empty
+        var hM = sheet.getRange(1, 13).getValue();
+        if (!hM || hM.toString().trim() === "") {
+          sheet.getRange(1, 13).setValue("Categories");
+        }
+        var hAE = sheet.getRange(1, 31).getValue();
+        if (!hAE || hAE.toString().trim() === "") {
+          sheet.getRange(1, 31).setValue("show of pdf");
+        }
+        var hAF = sheet.getRange(1, 32).getValue();
+        if (!hAF || hAF.toString().trim() === "") {
+          sheet.getRange(1, 32).setValue("list");
+        }
       } else {
         sheet.getRange(rowToUpdate, 2).setValue(id || "");
         sheet.getRange(rowToUpdate, 3).setValue(name || "");
@@ -6951,14 +6988,35 @@ function doPost(e) {
 
       sheet.getRange(rowToUpdate, 28).setValue(abVal); // Col AB: UnlimitedStock
       sheet.getRange(rowToUpdate, 29).setValue(acVal); // Col AC: Stock / 庫存
-      sheet.getRange(rowToUpdate, 13).setValue(remarks || ""); // Col M: Categories / 備註
+
+      // Col M (13: Header 'Categories')
+      var remarksVal = (param.remarks !== undefined ? param.remarks : (param.categories !== undefined ? param.categories : "")).toString();
+      var colMCategoriesIndex = 13;
+      var lastCol = Math.min(sheet.getLastColumn(), 50);
+      for (var c = 1; c <= lastCol; c++) {
+        var headerVal = (sheet.getRange(1, c).getValue() || "").toString().trim().toLowerCase();
+        if (headerVal === "categories") {
+          colMCategoriesIndex = c;
+          break;
+        }
+      }
+      sheet.getRange(rowToUpdate, colMCategoriesIndex).setValue(remarksVal); // Col M: Categories / 備註
       
-      var showOnPdf = param.showOnPdf;
-      if (showOnPdf !== undefined && showOnPdf !== "") {
-        var showPdfVal = (showOnPdf === false || showOnPdf === "N") ? "N" : "0";
-        sheet.getRange(rowToUpdate, 31).setValue(showPdfVal); // Col AE: show on pdf
-      } else if (foundIndex === -1) {
-        sheet.getRange(rowToUpdate, 31).setValue("0"); // Col AE: default new product to show on PDF (0)
+      // Col AE (31: Header 'show of pdf') & Col AF (32: Header 'list')
+      // Requirement: as '建立商品' (addProduct) is pressed, input '0' to Col AE and Col AF
+      if (action === 'addProduct' || foundIndex === -1) {
+        sheet.getRange(rowToUpdate, 31).setValue("0"); // Col AE (show of pdf): input '0'
+        sheet.getRange(rowToUpdate, 32).setValue("0"); // Col AF (list): input '0'
+      } else {
+        var showOnPdf = param.showOnPdf;
+        if (showOnPdf !== undefined && showOnPdf !== "") {
+          var showPdfVal = (showOnPdf === false || showOnPdf === "N") ? "N" : "0";
+          sheet.getRange(rowToUpdate, 31).setValue(showPdfVal); // Col AE: show of pdf
+        }
+        var list = param.list;
+        if (list !== undefined && list !== "") {
+          sheet.getRange(rowToUpdate, 32).setValue(list); // Col AF: list
+        }
       }
 
       // Record stock change into 'Purchase' tab (5 Headers: Date, Product, Quantity from, Quantity to, Net)
@@ -8684,7 +8742,7 @@ function revertStockForOrders(orderIdsMap) {
                             {/* Info */}
                             <div className="pt-1.5 px-0.5 min-w-0 flex flex-col justify-between flex-1">
                               <h4 className="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">{p.costName || p.name}</h4>
-                              <div className="mt-1.5 self-start bg-slate-50 text-slate-900 border border-slate-200 px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-bold">
+                              <div className="mt-1.5 self-start bg-slate-50 text-slate-900 border border-slate-200 px-2 py-0.5 rounded text-xs sm:text-sm font-black tracking-tight">
                                 {priceVal > 0 ? `HKD ${priceVal.toFixed(2)}` : "請詢價"}
                               </div>
                             </div>
@@ -8785,7 +8843,7 @@ function revertStockForOrders(orderIdsMap) {
                     {/* Info */}
                     <div className="pt-1.5 px-0.5 min-w-0 flex flex-col justify-between flex-1">
                       <h4 className="font-bold text-xs text-slate-800 line-clamp-2 leading-snug">{p.costName || p.name}</h4>
-                      <div className="mt-1.5 self-start bg-slate-50 text-slate-900 border border-slate-200 px-1.5 py-0.5 rounded text-[11px] font-bold">
+                      <div className="mt-1.5 self-start bg-slate-50 text-slate-900 border border-slate-200 px-2 py-0.5 rounded text-xs sm:text-sm font-black tracking-tight">
                         {priceVal > 0 ? `HK$${priceVal.toFixed(2)}` : "請詢價"}
                       </div>
                     </div>
