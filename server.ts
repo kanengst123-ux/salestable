@@ -1,3026 +1,931 @@
-import dotenv from "dotenv";
-dotenv.config();
-
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import fs from "fs";
-import { ZipArchive } from "archiver";
-import { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
-
-const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
-
-// Google Cloud Storage S3 Compatible HMAC configuration
-const bucketName = process.env.GCS_BUCKET_NAME || "my-product-catalog-images";
-let s3Client: S3Client | null = null;
-let gcsDisabledDueToBilling = false;
-let gcsBillingErrorTime = 0;
-
-function handleGcsError(error: any, context: string) {
-  const errMsg = (error?.message || "").toLowerCase();
-  if (errMsg.includes("delinquent") || errMsg.includes("billing") || error?.$metadata?.httpStatusCode === 403 || error?.Code === "AccessDenied") {
-    gcsDisabledDueToBilling = true;
-    gcsBillingErrorTime = Date.now();
-    console.log(`[Storage] Cloud sync paused (local file storage active for ${context}).`);
-  } else {
-    console.log(`[Storage] Local fallback active for context: ${context}`);
-  }
-}
-
-function isGcsAvailable(): boolean {
-  if (!s3Client) return false;
-  if (gcsDisabledDueToBilling) {
-    // Retry GCS every 30 seconds in case billing has been reinstated by user
-    if (Date.now() - gcsBillingErrorTime > 30000) {
-      gcsDisabledDueToBilling = false; // Reset to retry on next request
-      return true;
-    }
-    return false;
-  }
-  return true;
-}
-
-if (process.env.GCS_ACCESS_KEY && process.env.GCS_SECRET_KEY) {
-  s3Client = new S3Client({
-    endpoint: "https://storage.googleapis.com",
-    region: "auto",
-    credentials: {
-      accessKeyId: process.env.GCS_ACCESS_KEY,
-      secretAccessKey: process.env.GCS_SECRET_KEY,
-    },
-  });
-  console.log(`[GCS Sync Client] Initialized S3 Client for GCS bucket: ${bucketName}`);
-} else {
-  console.log(`[GCS Sync Client] GCS Credentials not present in env. Running in client local fallback mode.`);
-}
-
-function getMimeType(filename: string): string {
-  const ext = path.extname(filename).toLowerCase();
-  switch (ext) {
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".png":
-      return "image/png";
-    case ".webp":
-      return "image/webp";
-    case ".gif":
-      return "image/gif";
-    default:
-      return "application/octet-stream";
-  }
-}
-
-// Simple CSV parser supporting quotes
-function parseCSV(csvText: string): string[][] {
-  const lines: string[][] = [];
-  let currentLine: string[] = [];
-  let currentField = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < csvText.length; i++) {
-    const char = csvText[i];
-    const nextChar = csvText[i + 1];
-
-    if (inQuotes) {
-      if (char === '"' && nextChar === '"') {
-        currentField += '"';
-        i++; // skip next quote
-      } else if (char === '"') {
-        inQuotes = false;
-      } else {
-        currentField += char;
-      }
-    } else {
-      if (char === '"') {
-        inQuotes = true;
-      } else if (char === ',') {
-        currentLine.push(currentField);
-        currentField = '';
-      } else if (char === '\r' || char === '\n') {
-        currentLine.push(currentField);
-        currentField = '';
-        // Only push non-empty lines
-        if (currentLine.some(cell => cell.trim().length > 0)) {
-          lines.push(currentLine);
-        }
-        currentLine = [];
-        if (char === '\r' && nextChar === '\n') {
-          i++; // skip \n
-        }
-      } else {
-        currentField += char;
-      }
-    }
-  }
-  if (currentField || currentLine.length > 0) {
-    currentLine.push(currentField);
-    lines.push(currentLine);
-  }
-  return lines;
-}
-
-// Sheet15 Image URL mapping and background sync helper
-let sheet15ImageMapCache: Map<string, string> | null = null;
-let lastSheet15FetchTime = 0;
-
-async function getSheet15ImageMap(): Promise<Map<string, string>> {
-  const now = Date.now();
-  if (sheet15ImageMapCache && (now - lastSheet15FetchTime) < CACHE_DURATION) {
-    return sheet15ImageMapCache;
-  }
-
-  const url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=1813720414";
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const csv = await res.text();
-    const rows = parseCSV(csv);
-    const map = new Map<string, string>();
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      if (!row || !row[0]) continue;
-      const prodId = row[0].trim();
-      const showPdf = (row[1] || "").trim().toUpperCase();
-      const imgUrls = (row[3] || "").trim();
-      if (imgUrls && showPdf !== "N") {
-        const cleanId = prodId.startsWith("id-") ? prodId : `id-${prodId}`;
-        const urls = imgUrls.split(/[|\n]/).map(u => u.trim()).filter(u => u.startsWith("http"));
-        if (urls.length > 0) {
-          map.set(cleanId.toLowerCase(), urls[0]);
-          const rawNoPrefix = cleanId.replace(/^id-/, "");
-          map.set(rawNoPrefix.toLowerCase(), urls[0]);
-        }
-      }
-    }
-    sheet15ImageMapCache = map;
-    lastSheet15FetchTime = now;
-    return map;
-  } catch (err: any) {
-    console.error("Failed to fetch Sheet15 image map:", err.message);
-    return sheet15ImageMapCache || new Map();
-  }
-}
-
-async function syncSheet15Images() {
-  try {
-    const map = await getSheet15ImageMap();
-    const publicDir = path.join(process.cwd(), "public");
-    if (!fs.existsSync(publicDir)) {
-      fs.mkdirSync(publicDir, { recursive: true });
-    }
-
-    const files = new Set(fs.readdirSync(publicDir));
-    let downloaded = 0;
-
-    for (const [key, imgUrl] of map.entries()) {
-      if (!key.startsWith("id-")) continue;
-      const filename = `${key}.jpg`;
-      if (!files.has(filename)) {
-        try {
-          const res = await fetch(imgUrl);
-          if (res.ok) {
-            const buf = Buffer.from(await res.arrayBuffer());
-            if (buf.length > 0) {
-              fs.writeFileSync(path.join(publicDir, filename), buf);
-              files.add(filename);
-              downloaded++;
-            }
-          }
-        } catch (downloadErr) {
-          // ignore individual download errors
-        }
-      }
-    }
-    if (downloaded > 0) {
-      console.log(`[Sheet15 Sync] Successfully auto-downloaded ${downloaded} new images into public/`);
-    }
-  } catch (e: any) {
-    console.error("[Sheet15 Sync] Error syncing Sheet15 images:", e.message);
-  }
-}
-
-// Memory cache for products to prevent rate-limiting or loading delay
-let productsCache: any[] = [];
-let lastFetchTime = 0;
-const CACHE_DURATION = 15 * 60 * 1000; // 15 minutes (900 seconds)
-
-async function fetchProductsFromSheet() {
-  const now = Date.now();
-  if (productsCache.length > 0 && (now - lastFetchTime) < CACHE_DURATION) {
-    return productsCache;
-  }
-
-  const url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=687938954";
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch Google Sheet: ${response.statusText}`);
-    }
-    const csvText = await response.text();
-    const rows = parseCSV(csvText);
-
-    if (rows.length < 2) {
-      throw new Error("CSV does not contain sufficient rows");
-    }
-
-    const headers = rows[0];
-    const dataRows = rows.slice(1);
-
-    // Fetch sheet15 image mappings to enrich product attributes
-    const sheet15Map = await getSheet15ImageMap().catch(() => new Map<string, string>());
-
-    // Map rows to clean Product representations
-    const rawProducts = dataRows.map((row, index) => {
-      const prodId = row[1] || `PROD-${index + 1}`;
-      const name = row[2] || "Unnamed Product";
-      const price = row[14] || "0.00";
-      const priceA = (row[17] || "").trim() || price;
-      const priceB = (row[18] || "").trim() || price;
-      const priceC = (row[19] || "").trim() || price;
-      const abVal = (row[27] || "").trim();
-      const acVal = (row[28] || "").trim();
-
-      // Stock logic:
-      // If Col AB is 1, always stock (hasStock = true).
-      // If Col AB is 0, check AC.
-      // If Col AC is 0, then grey out product pic (hasStock = false).
-      const alwaysStock = abVal === "1";
-      const secondaryStock = acVal !== "0" && acVal !== "";
-      const hasStock = alwaysStock ? true : secondaryStock;
-
-      // Capture all other columns so the frontend can build custom details dynamically
-      const extraAttributes: Record<string, string> = {};
-      headers.forEach((header, colIndex) => {
-        if (header && colIndex !== 1 && colIndex !== 2 && colIndex !== 14) {
-          extraAttributes[header] = row[colIndex] || "";
-        }
-      });
-
-      // Enrich Image URLs from Sheet15 if available
-      const cleanLookup = prodId.toLowerCase().replace(/^id-/, "");
-      const s15Url = sheet15Map.get(prodId.toLowerCase()) || 
-                     sheet15Map.get(`id-${cleanLookup}`) || 
-                     sheet15Map.get(cleanLookup);
-      if (s15Url) {
-        if (!extraAttributes["Image URLs"]) {
-          extraAttributes["Image URLs"] = s15Url;
-        }
-      }
-
-      return {
-        id: prodId,
-        name,
-        price,
-        priceA,
-        priceB,
-        priceC,
-        hasStock,
-        alwaysStock,
-        secondaryStockCount: acVal,
-        extraAttributes,
-        allValues: row // Keep a raw representation
-      };
-    }).filter(p => p.id && p.name !== "Unnamed Product");
-
-    // Deduplicate products by ID to prevent duplicate key warning and redundant product cards in UI
-    const uniqueProducts: any[] = [];
-    const seenIds = new Set<string>();
-    for (const p of rawProducts) {
-      if (!seenIds.has(p.id)) {
-        seenIds.add(p.id);
-        uniqueProducts.push(p);
-      }
-    }
-
-    productsCache = uniqueProducts;
-    lastFetchTime = now;
-    
-    // Save a local JSON backup for offline/error resilience
-    try {
-      fs.writeFileSync("products_backup.json", JSON.stringify(uniqueProducts, null, 2));
-    } catch (e) {
-      console.error("Failed to write products backup:", e);
-    }
-
-    return uniqueProducts;
-  } catch (error) {
-    console.error("Error fetching products from Google Sheets, attempting backup:", error);
-    if (productsCache.length > 0) {
-      return productsCache;
-    }
-    try {
-      if (fs.existsSync("products_backup.json")) {
-        const backupData = fs.readFileSync("products_backup.json", "utf-8");
-        const parsedBackup = JSON.parse(backupData);
-        const uniqueBackup: any[] = [];
-        const seenIds = new Set<string>();
-        for (const p of parsedBackup) {
-          if (p && p.id && !seenIds.has(p.id)) {
-            seenIds.add(p.id);
-            uniqueBackup.push(p);
-          }
-        }
-        productsCache = uniqueBackup;
-        return productsCache;
-      }
-    } catch (backupError) {
-      console.error("No valid backup found:", backupError);
-    }
-    return [];
-  }
-}
-
-let costCategoriesCache: {
-  symbolToName: Record<string, string>;
-  productIdToSymbol: Record<string, string>;
-  productIdToCostName: Record<string, string>;
-  categoryOrder: { symbol: string; name: string }[];
-  highlightCategories: string[];
-  brands: string[];
-  sectionsOrder: { type: "brand" | "categories" | "category"; symbol: string; name: string }[];
-} | null = null;
-let lastCostFetchTime = 0;
-
-async function fetchCostCategories() {
-  const now = Date.now();
-  if (costCategoriesCache && (now - lastCostFetchTime) < CACHE_DURATION) {
-    return costCategoriesCache;
-  }
-
-  const url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=0";
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch Google Sheet Cost Tab: ${response.statusText}`);
-    }
-    const csvText = await response.text();
-    const rows = parseCSV(csvText);
-
-    const symbolToName: Record<string, string> = {};
-    const productIdToSymbol: Record<string, string> = {};
-    const productIdToCostName: Record<string, string> = {};
-    const categoryOrder: { symbol: string; name: string }[] = [];
-    const highlightCategories: string[] = [];
-    const brands: string[] = [];
-    const sectionsOrder: { type: "brand" | "categories" | "category"; symbol: string; name: string }[] = [];
-    const seenSymbols = new Set<string>();
-
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      if (!row) continue;
-
-      const prodId = (row[0] || "").replace(/\r/g, "").trim();
-      const catSymbol = (row[1] || "").replace(/\r/g, "").trim();
-      const costName = (row[2] || "").replace(/\r/g, "").trim();
-
-      if (prodId && catSymbol) {
-        productIdToSymbol[prodId] = catSymbol;
-      }
-      if (prodId && costName) {
-        productIdToCostName[prodId] = costName;
-      }
-
-      const mapSymbol = (row[4] || "").replace(/\r/g, "").trim();
-      const mapName = (row[5] || "").replace(/\r/g, "").trim();
-
-      if (mapSymbol && mapName) {
-        const upperSymbol = mapSymbol.toUpperCase();
-        if (upperSymbol === "BRAND") {
-          if (!brands.includes(mapName)) {
-            brands.push(mapName);
-          }
-          sectionsOrder.push({ type: "brand", symbol: mapSymbol, name: mapName });
-        } else if (upperSymbol === "CATEGORIES") {
-          if (!highlightCategories.includes(mapName)) {
-            highlightCategories.push(mapName);
-          }
-          sectionsOrder.push({ type: "categories", symbol: mapSymbol, name: mapName });
-        } else {
-          symbolToName[mapSymbol] = mapName;
-          if (!seenSymbols.has(mapSymbol)) {
-            seenSymbols.add(mapSymbol);
-            categoryOrder.push({ symbol: mapSymbol, name: mapName });
-          }
-          sectionsOrder.push({ type: "category", symbol: mapSymbol, name: mapName });
-        }
-      }
-
-      // Backward compatibility if Col G still has any brand words
-      if (row.length > 6) {
-        const brandWord = (row[6] || "").replace(/\r/g, "").trim();
-        if (
-          brandWord &&
-          brandWord.toLowerCase() !== "brand" &&
-          brandWord.toLowerCase() !== "品牌" &&
-          !brands.includes(brandWord)
-        ) {
-          brands.push(brandWord);
-        }
-      }
-    }
-
-    costCategoriesCache = {
-      symbolToName,
-      productIdToSymbol,
-      productIdToCostName,
-      categoryOrder,
-      highlightCategories,
-      brands,
-      sectionsOrder
-    };
-    lastCostFetchTime = now;
-
-    try {
-      fs.writeFileSync("cost_categories_backup.json", JSON.stringify(costCategoriesCache, null, 2));
-    } catch (e) {
-      console.error("Failed to write cost categories backup:", e);
-    }
-
-    return costCategoriesCache;
-  } catch (error) {
-    console.error("Error fetching cost categories from Google Sheets, attempting backup:", error);
-    if (costCategoriesCache) {
-      return costCategoriesCache;
-    }
-    try {
-      if (fs.existsSync("cost_categories_backup.json")) {
-        const backupData = fs.readFileSync("cost_categories_backup.json", "utf-8");
-        costCategoriesCache = JSON.parse(backupData);
-        return costCategoriesCache!;
-      }
-    } catch (backupError) {
-      console.error("No valid cost categories backup found:", backupError);
-    }
-    return { symbolToName: {}, productIdToSymbol: {}, productIdToCostName: {}, categoryOrder: [], highlightCategories: [], brands: [], sectionsOrder: [] };
-  }
-}
-
-let promoCategoriesCache: string[] | null = null;
-let lastPromoFetchTime = 0;
-
-async function fetchPromoCategories() {
-  const now = Date.now();
-  if (promoCategoriesCache && (now - lastPromoFetchTime) < CACHE_DURATION) {
-    return promoCategoriesCache;
-  }
-
-  const url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=1674918009";
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch Google Sheet Promo Tab: ${response.statusText}`);
-    }
-    const csvText = await response.text();
-    const rows = parseCSV(csvText);
-
-    const categoriesSet = new Set<string>();
-    // Header is row 0, Col K is index 10
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      if (row && row.length > 10) {
-        const val = (row[10] || "").replace(/\r/g, "").trim();
-        if (val && val !== "des" && val !== "description") {
-          categoriesSet.add(val);
-        }
-      }
-    }
-
-    const categories = Array.from(categoriesSet);
-    promoCategoriesCache = categories;
-    lastPromoFetchTime = now;
-
-    try {
-      fs.writeFileSync("promo_categories_backup.json", JSON.stringify(promoCategoriesCache, null, 2));
-    } catch (e) {
-      console.error("Failed to write promo categories backup:", e);
-    }
-
-    return promoCategoriesCache;
-  } catch (error) {
-    console.error("Error fetching promo categories from Google Sheets, attempting backup:", error);
-    if (promoCategoriesCache) {
-      return promoCategoriesCache;
-    }
-    try {
-      if (fs.existsSync("promo_categories_backup.json")) {
-        const backupData = fs.readFileSync("promo_categories_backup.json", "utf-8");
-        promoCategoriesCache = JSON.parse(backupData);
-        return promoCategoriesCache!;
-      }
-    } catch (backupError) {
-      console.error("No valid promo categories backup found:", backupError);
-    }
-    return ['奶粉', '尿片', '中成藥/油', '藥品', '家品', '外用品', '品牌保健', '食品/飲品'];
-  }
-}
-
-// Local products persistence helpers
-const LOCAL_PRODUCTS_FILE = path.join(process.cwd(), "local_products.json");
-
-function isProductShowOnPdf(p: any): boolean {
-  if (!p) return false;
-  const val = (
-    p.extraAttributes?.["show on pdf"] ||
-    p.extraAttributes?.["show on pdf "] ||
-    (p.allValues ? p.allValues[30] : "") ||
-    ""
-  ).toString().trim().toUpperCase();
-  return val !== "N";
-}
-
-function getLocalProducts(): any[] {
-  try {
-    if (fs.existsSync(LOCAL_PRODUCTS_FILE)) {
-      return JSON.parse(fs.readFileSync(LOCAL_PRODUCTS_FILE, "utf-8"));
-    }
-  } catch (error) {
-    console.error("Failed to read local products:", error);
-  }
-  return [];
-}
-
-function saveLocalProducts(products: any[]) {
-  try {
-    fs.writeFileSync(LOCAL_PRODUCTS_FILE, JSON.stringify(products, null, 2));
-  } catch (error) {
-    console.error("Failed to save local products:", error);
-  }
-}
-
-// Google Sheets Integration settings persistence helpers
-const SHEET_SETTINGS_FILE = path.join(process.cwd(), "sheet_settings.json");
-
-function getSheetSettings() {
-  try {
-    if (fs.existsSync(SHEET_SETTINGS_FILE)) {
-      const data = JSON.parse(fs.readFileSync(SHEET_SETTINGS_FILE, "utf-8"));
-      return {
-        appsScriptUrl: data.appsScriptUrl || "https://script.google.com/macros/s/AKfycbxJBpLD4XstIGc_47V4ys3WYr_OX5vfsc36u5aEIsAyv06wYDWT_FFuAooQVMt1Pq8R/exec",
-        enabled: data.enabled !== undefined ? !!data.enabled : true
-      };
-    }
-  } catch (error) {
-    console.error("Failed to read sheet settings:", error);
-  }
-  return { 
-    appsScriptUrl: "https://script.google.com/macros/s/AKfycbxJBpLD4XstIGc_47V4ys3WYr_OX5vfsc36u5aEIsAyv06wYDWT_FFuAooQVMt1Pq8R/exec", 
-    enabled: true 
-  };
-}
-
-// Purchase tab change log persistence
-const PURCHASES_FILE = path.join(process.cwd(), "purchases_backup.json");
-
-interface PurchaseLog {
-  id: string;
-  date: string;
-  product: string;
-  quantityFrom: string | number;
-  quantityTo: string | number;
-  net: number;
-}
-
-function getPurchases(): PurchaseLog[] {
-  try {
-    if (fs.existsSync(PURCHASES_FILE)) {
-      const data = fs.readFileSync(PURCHASES_FILE, "utf-8");
-      return JSON.parse(data);
-    }
-  } catch (error) {
-    console.error("Failed to read purchases log:", error);
-  }
-  return [];
-}
-
-function savePurchases(records: PurchaseLog[]) {
-  try {
-    fs.writeFileSync(PURCHASES_FILE, JSON.stringify(records, null, 2));
-  } catch (error) {
-    console.error("Failed to save purchases log:", error);
-  }
-}
-
-function addPurchaseRecord(record: PurchaseLog) {
-  const records = getPurchases();
-  records.unshift(record); // newest first
-  savePurchases(records);
-}
-
-function saveSheetSettings(settings: any) {
-  try {
-    fs.writeFileSync(SHEET_SETTINGS_FILE, JSON.stringify(settings, null, 2));
-  } catch (error) {
-    console.error("Failed to save sheet settings:", error);
-  }
-}
-
-async function triggerSheetsSync(
-  id: string, 
-  name: string, 
-  price: string, 
-  quantity: string, 
-  remarks: string, 
-  action: string = "addProduct", 
-  priceA?: string, 
-  priceB?: string, 
-  priceC?: string, 
-  categorySymbol?: string, 
-  showOnPdf?: string,
-  stockChanged?: boolean,
-  quantityFrom?: string | number,
-  quantityTo?: string | number,
-  net?: number,
-  date?: string,
-  list?: string
-) {
-  const settings = getSheetSettings();
-  if (settings.enabled && settings.appsScriptUrl) {
-    try {
-      const payload: any = { 
-        action, 
-        id, 
-        name, 
-        price, 
-        quantity, 
-        remarks, 
-        categories: remarks,
-        priceA, 
-        priceB, 
-        priceC, 
-        categorySymbol, 
-        showOnPdf: showOnPdf !== undefined ? showOnPdf : "0",
-        list: list !== undefined ? list : "0"
-      };
-
-      // Include stock change log fields for 'Purchase' tab if stock level was changed
-      if (stockChanged) {
-        payload.stockChanged = true;
-        payload.quantityFrom = quantityFrom;
-        payload.quantityTo = quantityTo;
-        payload.net = net;
-        payload.date = date || new Date().toLocaleString("zh-HK", { hour12: false });
-      }
-
-      console.log(`[triggerSheetsSync] Sync payload details:`, payload);
-      // Use dynamic import for fetch if needed, but since NodeJS 18 has global fetch, we call it directly
-      const response = await fetch(settings.appsScriptUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      const responseText = await response.text();
-      console.log("Apps Script response:", responseText);
-    } catch (err) {
-      console.error("Failed to sync to Google Sheets Apps Script:", err);
-    }
-  }
-}
-
-// Limited Offer (limit_offer tab in Google Sheet) persistence & sync
-// Title | Date_from | Date_to | Price_from | Price_to | Stock
-const LIMIT_OFFERS_FILE = path.join(process.cwd(), "limit_offers_backup.json");
-
-export interface LimitOfferEntry {
-  title: string;        // Title (Product Name)
-  date_from: string;    // Date_from (YYYY-MM-DD)
-  date_to: string;      // Date_to (YYYY-MM-DD)
-  price_from: string;   // Price_from (Original Price)
-  price_to: string;     // Price_to (Offer Price)
-  stock: string;        // Stock (Col AC of 'raw')
-  status?: "active" | "scheduled" | "expired";
-}
-
-function getLocalLimitOffers(): LimitOfferEntry[] {
-  try {
-    if (fs.existsSync(LIMIT_OFFERS_FILE)) {
-      return JSON.parse(fs.readFileSync(LIMIT_OFFERS_FILE, "utf-8"));
-    }
-  } catch (error) {
-    console.error("Failed to read limit offers backup:", error);
-  }
-  return [];
-}
-
-function saveLocalLimitOffers(offers: LimitOfferEntry[]) {
-  try {
-    fs.writeFileSync(LIMIT_OFFERS_FILE, JSON.stringify(offers, null, 2));
-  } catch (error) {
-    console.error("Failed to save limit offers backup:", error);
-  }
-}
-
-function computeOfferStatus(dateFrom: string, dateTo: string): "active" | "scheduled" | "expired" {
-  const now = new Date();
-  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(now);
-  const cleanFrom = (dateFrom || "").slice(0, 10);
-  const cleanTo = (dateTo || "").slice(0, 10);
-  if (cleanFrom && cleanTo) {
-    if (todayStr < cleanFrom) return "scheduled";
-    if (todayStr > cleanTo) return "expired";
-    return "active";
-  }
-  return "active";
-}
-
-async function fetchLimitOffersFromSheet(): Promise<LimitOfferEntry[]> {
-  const settings = getSheetSettings();
-  if (settings.enabled && settings.appsScriptUrl) {
-    // 1. Try POST with action getLimitOffers
-    try {
-      const response = await fetch(settings.appsScriptUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "getLimitOffers" })
-      });
-      if (response.ok) {
-        const text = await response.text();
-        try {
-          const parsed = JSON.parse(text);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const mapped: LimitOfferEntry[] = parsed.map((item: any) => ({
-              title: String(item.title || item.Title || item.name || "").trim(),
-              date_from: String(item.date_from || item.Date_from || item.startDate || "").slice(0, 10),
-              date_to: String(item.date_to || item.Date_to || item.endDate || "").slice(0, 10),
-              price_from: String(item.price_from !== undefined ? item.price_from : (item.Price_from !== undefined ? item.Price_from : "")),
-              price_to: String(item.price_to !== undefined ? item.price_to : (item.Price_to !== undefined ? item.Price_to : "")),
-              stock: String(item.stock !== undefined ? item.stock : (item.Stock !== undefined ? item.Stock : "")),
-              status: computeOfferStatus(item.date_from || item.Date_from, item.date_to || item.Date_to)
-            }));
-            saveLocalLimitOffers(mapped);
-            return mapped;
-          }
-        } catch (e) {}
-      }
-    } catch (err) {
-      console.warn("[limit_offer] fetchLimitOffersFromSheet POST error:", err);
-    }
-
-    // 2. Try GET with action=getLimitOffers
-    try {
-      const getUrl = `${settings.appsScriptUrl}${settings.appsScriptUrl.includes('?') ? '&' : '?'}action=getLimitOffers`;
-      const response = await fetch(getUrl);
-      if (response.ok) {
-        const text = await response.text();
-        try {
-          const parsed = JSON.parse(text);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const mapped: LimitOfferEntry[] = parsed.map((item: any) => ({
-              title: String(item.title || item.Title || item.name || "").trim(),
-              date_from: String(item.date_from || item.Date_from || item.startDate || "").slice(0, 10),
-              date_to: String(item.date_to || item.Date_to || item.endDate || "").slice(0, 10),
-              price_from: String(item.price_from !== undefined ? item.price_from : (item.Price_from !== undefined ? item.Price_from : "")),
-              price_to: String(item.price_to !== undefined ? item.price_to : (item.Price_to !== undefined ? item.Price_to : "")),
-              stock: String(item.stock !== undefined ? item.stock : (item.Stock !== undefined ? item.Stock : "")),
-              status: computeOfferStatus(item.date_from || item.Date_from, item.date_to || item.Date_to)
-            }));
-            saveLocalLimitOffers(mapped);
-            return mapped;
-          }
-        } catch (e) {}
-      }
-    } catch (err) {
-      console.warn("[limit_offer] fetchLimitOffersFromSheet GET error:", err);
-    }
-  }
-
-  // Fallback to local backup
-  const local = getLocalLimitOffers();
-  return local.map(item => ({
-    ...item,
-    status: computeOfferStatus(item.date_from, item.date_to)
-  }));
-}
-
-async function uploadLimitOffersToSheet(entries: LimitOfferEntry[]) {
-  // Update local backup (latest on top)
-  const current = getLocalLimitOffers();
-  const updated = [...entries, ...current];
-  saveLocalLimitOffers(updated);
-
-  // Sync to Google Sheet Apps Script limit_offer tab
-  const settings = getSheetSettings();
-  if (settings.enabled && settings.appsScriptUrl) {
-    try {
-      const response = await fetch(settings.appsScriptUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "addLimitOffer",
-          entries: entries
-        })
-      });
-      const txt = await response.text();
-      console.log(`[limit_offer sync to Sheet result]:`, txt);
-    } catch (err) {
-      console.error("[limit_offer] Failed to upload limit offers to Google Sheet:", err);
-    }
-  }
-
-  // Also sync Col O in raw if any entry is active today
-  const now = new Date();
-  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(now);
-  let localProducts = getLocalProducts();
-  for (const ent of entries) {
-    if (ent.date_from <= todayStr && todayStr <= ent.date_to) {
-      const p = localProducts.find((prod: any) => prod.name.trim() === ent.title.trim()) ||
-                productsCache.find((prod: any) => prod.name.trim() === ent.title.trim());
-      if (p) {
-        updateSingleProductPrice(p.id, p.name, ent.price_to, localProducts);
-      }
-    }
-  }
-}
-
-// Sales Promotion Campaign persistence (銷售訊息)
-const PROMOTIONS_FILE = path.join(process.cwd(), "promotions_backup.json");
-
-export interface PromoCampaignItem {
-  productId: string;
-  productName: string;
-  originalPrice: string;
-  promoPrice: string;
-  applied: boolean;
-}
-
-export interface SalesPromotionCampaign {
-  id: string;
-  startDate: string; // "YYYY-MM-DD"
-  endDate: string;   // "YYYY-MM-DD"
-  createdAt: string;
-  items: PromoCampaignItem[];
-  status: "active" | "scheduled" | "expired" | "reverted" | "completed";
-}
-
-function getSalesPromotions(): SalesPromotionCampaign[] {
-  try {
-    if (fs.existsSync(PROMOTIONS_FILE)) {
-      const campaigns: SalesPromotionCampaign[] = JSON.parse(fs.readFileSync(PROMOTIONS_FILE, "utf-8"));
-      let modified = false;
-      for (const c of campaigns) {
-        // Any campaign that has been written to Google Sheet Col O or marked active is completed
-        if (c.status === "active") {
-          c.status = "completed";
-          modified = true;
-        }
-      }
-      if (modified) {
-        try {
-          fs.writeFileSync(PROMOTIONS_FILE, JSON.stringify(campaigns, null, 2));
-        } catch (e) {}
-      }
-      return campaigns;
-    }
-  } catch (error) {
-    console.error("Failed to read promotions file:", error);
-  }
-  return [];
-}
-
-function saveSalesPromotions(campaigns: SalesPromotionCampaign[]) {
-  try {
-    fs.writeFileSync(PROMOTIONS_FILE, JSON.stringify(campaigns, null, 2));
-  } catch (error) {
-    console.error("Failed to save promotions file:", error);
-  }
-}
-
-function updateSingleProductPrice(productId: string, productName: string, newPrice: string, localProductsList: any[]) {
-  const pIdx = localProductsList.findIndex((p: any) => p.id === productId);
-  if (pIdx !== -1) {
-    localProductsList[pIdx].price = newPrice;
-    if (localProductsList[pIdx].allValues) {
-      while (localProductsList[pIdx].allValues.length < 33) {
-        localProductsList[pIdx].allValues.push("");
-      }
-      localProductsList[pIdx].allValues[14] = newPrice; // Col O (Price)
-    }
-  } else {
-    let sheetProduct = productsCache.find((p: any) => p.id === productId);
-    if (!sheetProduct && fs.existsSync("products_backup.json")) {
-      try {
-        const backup = JSON.parse(fs.readFileSync("products_backup.json", "utf-8"));
-        sheetProduct = backup.find((p: any) => p.id === productId);
-      } catch (e) {}
-    }
-    const allVals = [...(sheetProduct?.allValues || [])];
-    while (allVals.length < 33) {
-      allVals.push("");
-    }
-    allVals[1] = productId;
-    allVals[2] = productName || sheetProduct?.name || "";
-    allVals[14] = newPrice;
-    const newProd = {
-      ...(sheetProduct || {}),
-      id: productId,
-      name: productName || sheetProduct?.name || "",
-      price: newPrice,
-      extraAttributes: {
-        ...(sheetProduct?.extraAttributes || {}),
-        "Categories": (sheetProduct?.extraAttributes?.["Categories"]) || "",
-        "show on pdf": (sheetProduct?.extraAttributes?.["show on pdf"]) || "0"
-      },
-      allValues: allVals
-    };
-    localProductsList.unshift(newProd);
-  }
-
-  // Also update in-memory cache if present
-  const cIdx = productsCache.findIndex((p: any) => p.id === productId);
-  if (cIdx !== -1) {
-    productsCache[cIdx].price = newPrice;
-    if (productsCache[cIdx].allValues) {
-      while (productsCache[cIdx].allValues.length < 33) {
-        productsCache[cIdx].allValues.push("");
-      }
-      productsCache[cIdx].allValues[14] = newPrice;
-    }
-  }
-
-  // Trigger Google Sheet sync for Col O ('Price')
-  triggerSheetsSync(
-    productId,
-    productName,
-    newPrice,
-    "",
-    "",
-    "updateProduct"
-  );
-}
-
-function checkAndApplyPromotions() {
-  const campaigns = getSalesPromotions();
-  if (campaigns.length === 0) return;
-
-  const now = new Date();
-  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(now);
-  let hasChanges = false;
-  let localProducts = getLocalProducts();
-
-  for (const camp of campaigns) {
-    if (camp.status === "reverted" || camp.status === "completed") continue;
-
-    const isWithinRange = camp.startDate <= todayStr && todayStr <= camp.endDate;
-    const isPastRange = todayStr > camp.endDate;
-
-    if (isWithinRange) {
-      for (const item of camp.items) {
-        if (!item.applied) {
-          const priceStr = String(item.promoPrice);
-          updateSingleProductPrice(item.productId, item.productName, priceStr, localProducts);
-          item.applied = true;
-          hasChanges = true;
-          console.log(`[Sales Promo Applied]: ${item.productName} (${item.productId}) price set to ${priceStr}`);
-        }
-      }
-      camp.status = "completed"; // Changes have been written to Google Sheet Col O!
-      hasChanges = true;
-    } else if (isPastRange) {
-      camp.status = "expired";
-      for (const item of camp.items) {
-        if (item.applied) {
-          const origPriceStr = String(item.originalPrice);
-          updateSingleProductPrice(item.productId, item.productName, origPriceStr, localProducts);
-          item.applied = false;
-          hasChanges = true;
-          console.log(`[Sales Promo Reverted]: ${item.productName} (${item.productId}) price reverted to ${origPriceStr}`);
-        }
-      }
-    } else {
-      camp.status = "scheduled";
-    }
-  }
-
-  if (hasChanges) {
-    saveSalesPromotions(campaigns);
-    saveLocalProducts(localProducts);
-  }
-}
-
-// Initial check on boot and every 5 minutes automatic lifecycle check
-try {
-  checkAndApplyPromotions();
-} catch (e) {
-  console.warn("Initial checkAndApplyPromotions error:", e);
-}
-setInterval(() => {
-  try {
-    checkAndApplyPromotions();
-  } catch (err) {
-    console.warn("Periodic checkAndApplyPromotions error:", err);
-  }
-}, 5 * 60 * 1000);
-
-// API Routes
-app.use(express.json({ limit: "100mb" }));
-
-app.get("/api/sheet-settings", (req, res) => {
-  res.json(getSheetSettings());
-});
-
-// Limit Offers API (Google Sheet 'limit_offer' Tab)
-app.get("/api/limit-offers", async (req, res) => {
-  try {
-    const offers = await fetchLimitOffersFromSheet();
-    res.json(offers);
-  } catch (error: any) {
-    console.error("Error fetching limit offers:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/limit-offers", async (req, res) => {
-  try {
-    const { entries } = req.body;
-    if (!Array.isArray(entries) || entries.length === 0) {
-      return res.status(400).json({ error: "Missing entries array" });
-    }
-    await uploadLimitOffersToSheet(entries);
-    const updated = await fetchLimitOffersFromSheet();
-    res.json({ success: true, offers: updated });
-  } catch (error: any) {
-    console.error("Error uploading limit offers:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/api/sales-promotions", async (req, res) => {
-  try {
-    const offers = await fetchLimitOffersFromSheet();
-    res.json(offers);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/sales-promotions", async (req, res) => {
-  try {
-    const { startDate, endDate, items, entries } = req.body;
-    let limitEntries: LimitOfferEntry[] = [];
-
-    if (Array.isArray(entries) && entries.length > 0) {
-      limitEntries = entries;
-    } else if (Array.isArray(items) && items.length > 0 && startDate && endDate) {
-      let localProducts = getLocalProducts();
-      limitEntries = items.map((it: any) => {
-        const prod = localProducts.find((p: any) => p.id === it.productId || p.name === it.productName) ||
-                     productsCache.find((p: any) => p.id === it.productId || p.name === it.productName);
-        const colAcStock = (prod && prod.allValues && prod.allValues[28] !== undefined && prod.allValues[28] !== "")
-          ? String(prod.allValues[28]).trim()
-          : (prod?.secondaryStockCount !== undefined && prod.secondaryStockCount !== "" ? String(prod.secondaryStockCount).trim() : (prod?.alwaysStock ? "長期充足" : "0"));
-        return {
-          title: it.productName || it.name || prod?.name || "",
-          date_from: startDate,
-          date_to: endDate,
-          price_from: String(it.originalPrice || prod?.price || ""),
-          price_to: String(it.promoPrice || it.price || ""),
-          stock: it.stock !== undefined ? String(it.stock) : colAcStock
-        };
-      });
-    } else {
-      return res.status(400).json({ error: "Missing startDate, endDate, or items" });
-    }
-
-    await uploadLimitOffersToSheet(limitEntries);
-    const updated = await fetchLimitOffersFromSheet();
-    res.json({ success: true, offers: updated, appliedNow: true });
-  } catch (error: any) {
-    console.error("Error creating sales promotion:", error);
-    res.status(500).json({ error: error.message || "Failed to create sales promotion" });
-  }
-});
-
-app.post("/api/sales-promotions/:id/revert", (req, res) => {
-  try {
-    const { id } = req.params;
-    const campaigns = getSalesPromotions();
-    const camp = campaigns.find(c => c.id === id);
-    if (!camp) {
-      return res.status(404).json({ error: "Campaign not found" });
-    }
-
-    let localProducts = getLocalProducts();
-    for (const it of camp.items) {
-      if (it.applied) {
-        updateSingleProductPrice(it.productId, it.productName, it.originalPrice, localProducts);
-        it.applied = false;
-        console.log(`[Sales Promo Manually Reverted]: ${it.productName} -> ${it.originalPrice}`);
-      }
-    }
-    camp.status = "reverted";
-    saveLocalProducts(localProducts);
-    saveSalesPromotions(campaigns);
-
-    res.json({ success: true, campaign: camp });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/sales-promotions/:id/complete", (req, res) => {
-  try {
-    const { id } = req.params;
-    const campaigns = getSalesPromotions();
-    const camp = campaigns.find(c => c.id === id);
-    if (!camp) {
-      return res.status(404).json({ error: "Campaign not found" });
-    }
-
-    camp.status = "completed";
-    saveSalesPromotions(campaigns);
-    res.json({ success: true, campaign: camp });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete("/api/sales-promotions/:id", (req, res) => {
-  try {
-    const { id } = req.params;
-    let campaigns = getSalesPromotions();
-    const camp = campaigns.find(c => c.id === id);
-    if (camp) {
-      let localProducts = getLocalProducts();
-      for (const it of camp.items) {
-        if (it.applied) {
-          updateSingleProductPrice(it.productId, it.productName, it.originalPrice, localProducts);
-          it.applied = false;
-        }
-      }
-      saveLocalProducts(localProducts);
-    }
-    campaigns = campaigns.filter(c => c.id !== id);
-    saveSalesPromotions(campaigns);
-    res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/api/purchases", (req, res) => {
-  res.json(getPurchases());
-});
-
-app.post("/api/purchases", (req, res) => {
-  try {
-    const { date, product, quantityFrom, quantityTo, net } = req.body;
-    if (!product) {
-      return res.status(400).json({ error: "Product name is required" });
-    }
-    const record: PurchaseLog = {
-      id: `pur-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      date: date || new Date().toLocaleString("zh-HK", { hour12: false }),
-      product,
-      quantityFrom: quantityFrom !== undefined ? quantityFrom : 0,
-      quantityTo: quantityTo !== undefined ? quantityTo : 0,
-      net: net !== undefined ? net : ((Number(quantityTo) || 0) - (Number(quantityFrom) || 0))
-    };
-    addPurchaseRecord(record);
-    res.json({ success: true, record });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/api/sheet-settings", (req, res) => {
-  try {
-    const { appsScriptUrl, enabled } = req.body;
-    const settings = {
-      appsScriptUrl: appsScriptUrl || "",
-      enabled: !!enabled
-    };
-    saveSheetSettings(settings);
-    res.json({ success: true, settings });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || "Failed to save sheet settings" });
-  }
-});
-
-app.get("/api/public-images", async (req, res) => {
-  try {
-    const publicDir = path.join(process.cwd(), "public");
-    const fileSet = new Set<string>();
-    if (fs.existsSync(publicDir)) {
-      const files = fs.readdirSync(publicDir);
-      files.forEach(f => fileSet.add(f));
-    }
-    // Also include mapped Sheet15 product IDs so the frontend knows an image is ready to render/fetch
-    try {
-      const map = await getSheet15ImageMap();
-      for (const key of map.keys()) {
-        if (key.startsWith("id-")) {
-          fileSet.add(`${key}.jpg`);
-        }
-      }
-    } catch (e) {}
-
-    res.json({ files: Array.from(fileSet) });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message || "Failed to list public images" });
-  }
-});
-
-app.get("/api/image-proxy", async (req, res) => {
-  try {
-    const url = req.query.url as string;
-    if (!url || !url.startsWith("http")) {
-      return res.status(400).send("Invalid URL");
-    }
-    const response = await fetch(url);
-    if (!response.ok) {
-      return res.status(response.status).send("Failed to fetch image");
-    }
-    const contentType = response.headers.get("content-type") || "image/jpeg";
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Cache-Control", "public, max-age=31536000");
-    const arrayBuffer = await response.arrayBuffer();
-    return res.send(Buffer.from(arrayBuffer));
-  } catch (err: any) {
-    return res.status(500).send(err.message || "Proxy error");
-  }
-});
-
-app.get("/api/fonts/:filename", (req, res) => {
-  try {
-    const filename = req.params.filename;
-    const fontPath = path.join(process.cwd(), "public", "fonts", filename);
-    if (fs.existsSync(fontPath)) {
-      res.setHeader("Content-Type", "font/ttf");
-      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-      return res.sendFile(fontPath);
-    }
-    return res.status(404).send("Font not found");
-  } catch (err: any) {
-    return res.status(500).send(err.message || "Font route error");
-  }
-});
-
-app.post("/api/sync-sheet-images", async (req, res) => {
-  try {
-    syncSheet15Images();
-    res.json({ success: true, message: "Sync started in background" });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message || "Failed to trigger sync" });
-  }
-});
-
-// Image backup and status tracker
-let imageBackupState = {
-  isRunning: false,
-  total: 0,
-  completed: 0,
-  succeeded: 0,
-  failed: 0,
-  alreadyExists: 0,
-  currentProduct: "",
-  startedAt: 0,
-  finishedAt: 0,
-  message: "Idle"
-};
-
-async function runImageBackupTask() {
-  if (imageBackupState.isRunning) return;
-  imageBackupState = {
-    isRunning: true,
-    total: 0,
-    completed: 0,
-    succeeded: 0,
-    failed: 0,
-    alreadyExists: 0,
-    currentProduct: "Initialising product list...",
-    startedAt: Date.now(),
-    finishedAt: 0,
-    message: "Fetching products..."
-  };
-
-  try {
-    const products = await fetchProductsFromSheet();
-    const sheet15Map = await getSheet15ImageMap();
-    const publicDir = path.join(process.cwd(), "public");
-    if (!fs.existsSync(publicDir)) {
-      fs.mkdirSync(publicDir, { recursive: true });
-    }
-
-    const existingFiles = new Set(fs.readdirSync(publicDir));
-    imageBackupState.total = products.length;
-    imageBackupState.message = `Processing ${products.length} products...`;
-
-    for (let i = 0; i < products.length; i++) {
-      const p = products[i];
-      const prodId = p.id;
-      const cleanId = prodId.replace(/^(id[-_])?/i, "");
-      const targetFilename = `id-${cleanId}.jpg`;
-      imageBackupState.currentProduct = `${p.name || prodId} (${i + 1}/${products.length})`;
-
-      // 1. Check if already exists in public/ and is non-empty
-      const localPath = path.join(publicDir, targetFilename);
-      if (fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
-        imageBackupState.alreadyExists++;
-        imageBackupState.completed++;
-        continue;
-      }
-
-      // Check alternate patterns (e.g. without id- or with suffix)
-      const altFile = Array.from(existingFiles).find(f => {
-        if (!/\.(jpg|jpeg|png|webp)$/i.test(f)) return false;
-        const base = f.substring(0, f.lastIndexOf(".")).toLowerCase();
-        return base === prodId.toLowerCase() || base === `id-${cleanId}`.toLowerCase() || base === cleanId.toLowerCase();
-      });
-
-      if (altFile && fs.existsSync(path.join(publicDir, altFile)) && fs.statSync(path.join(publicDir, altFile)).size > 0) {
-        // Create an id-{cleanId}.jpg symlink or copy
-        try {
-          fs.copyFileSync(path.join(publicDir, altFile), localPath);
-          existingFiles.add(targetFilename);
-          imageBackupState.alreadyExists++;
-          imageBackupState.completed++;
-          continue;
-        } catch (_) {}
-      }
-
-      // 2. Fetch from product's image URL or Sheet15 map
-      const candidateUrls: string[] = [];
-      if (p.extraAttributes && p.extraAttributes["Image URLs"]) {
-        const uList = String(p.extraAttributes["Image URLs"]).split(/[\n,]/).map(u => u.trim()).filter(u => u.startsWith("http"));
-        candidateUrls.push(...uList);
-      }
-      const sheet15Url = sheet15Map.get(prodId.toLowerCase()) || sheet15Map.get(`id-${cleanId}`.toLowerCase()) || sheet15Map.get(cleanId.toLowerCase());
-      if (sheet15Url && !candidateUrls.includes(sheet15Url)) {
-        candidateUrls.push(sheet15Url);
-      }
-
-      let downloaded = false;
-      for (const imgUrl of candidateUrls) {
-        try {
-          const fetchRes = await fetch(imgUrl, {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-              "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
-            }
-          });
-          if (fetchRes.ok) {
-            const buf = Buffer.from(await fetchRes.arrayBuffer());
-            if (buf.length > 0) {
-              fs.writeFileSync(localPath, buf);
-              existingFiles.add(targetFilename);
-              imageBackupState.succeeded++;
-              downloaded = true;
-              break;
-            }
-          }
-        } catch (fetchErr) {
-          // try next url
-        }
-      }
-
-      if (!downloaded) {
-        imageBackupState.failed++;
-      }
-      imageBackupState.completed++;
-    }
-
-    imageBackupState.isRunning = false;
-    imageBackupState.finishedAt = Date.now();
-    imageBackupState.message = `Backup completed! Local: ${imageBackupState.alreadyExists + imageBackupState.succeeded}, Failed: ${imageBackupState.failed}`;
-  } catch (err: any) {
-    imageBackupState.isRunning = false;
-    imageBackupState.finishedAt = Date.now();
-    imageBackupState.message = `Backup interrupted: ${err.message}`;
-  }
-}
-
-// Start image backup to server disk
-app.post("/api/backup/images/start", (req, res) => {
-  if (imageBackupState.isRunning) {
-    return res.json({ success: true, message: "Backup already running", status: imageBackupState });
-  }
-  runImageBackupTask();
-  res.json({ success: true, message: "Image backup task started", status: imageBackupState });
-});
-
-// Check backup status
-app.get("/api/backup/images/status", (req, res) => {
-  const publicDir = path.join(process.cwd(), "public");
-  let localFileCount = 0;
-  if (fs.existsSync(publicDir)) {
-    localFileCount = fs.readdirSync(publicDir).filter(f => /\.(jpg|jpeg|png|webp)$/i.test(f)).length;
-  }
-  res.json({
-    ...imageBackupState,
-    localFileCount
-  });
-});
-
-// Download all saved product images as a single ZIP file
-app.get("/api/backup/images/zip", (req, res) => {
-  const publicDir = path.join(process.cwd(), "public");
-  if (!fs.existsSync(publicDir)) {
-    return res.status(404).send("Public directory not found");
-  }
-
-  const imageFiles = fs.readdirSync(publicDir).filter(f => /\.(jpg|jpeg|png|webp)$/i.test(f));
-  if (imageFiles.length === 0) {
-    return res.status(404).send("No images found to download");
-  }
-
-  const archive = new ZipArchive({ zlib: { level: 5 } });
-  const filename = `product-images-backup-${new Date().toISOString().slice(0, 10)}.zip`;
-
-  res.setHeader("Content-Type", "application/zip");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-
-  archive.on("error", (err) => {
-    console.error("ZIP Archive Error:", err);
-    res.status(500).end();
-  });
-
-  archive.pipe(res);
-
-  for (const file of imageFiles) {
-    const filePath = path.join(publicDir, file);
-    if (fs.existsSync(filePath)) {
-      archive.file(filePath, { name: file });
-    }
-  }
-
-  archive.finalize();
-});
-
-// Explicit API endpoints for retrieving product image by ID or Product Name
-app.get(["/api/products/:id/image", "/api/images/:id"], async (req, res) => {
-  const rawId = decodeURIComponent(req.params.id || "").trim();
-  const cleanId = rawId.replace(/^(id[-_])?/i, "").replace(/\.(jpg|jpeg|png|webp)$/i, "");
-  const publicDir = path.join(process.cwd(), "public");
-
-  // 1. Direct candidates filename in public/
-  const candidates = [
-    `id-${cleanId}.jpg`,
-    `id-${cleanId}.jpeg`,
-    `id-${cleanId}.png`,
-    `id-${cleanId}.webp`,
-    `${cleanId}.jpg`,
-    `${cleanId}.jpeg`,
-    `${rawId}.jpg`,
-    `${rawId}`
-  ];
-
-  for (const c of candidates) {
-    const fPath = path.join(publicDir, c);
-    if (fs.existsSync(fPath)) {
-      const stats = fs.statSync(fPath);
-      if (stats.size > 0) {
-        res.setHeader("Content-Type", getMimeType(c));
-        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-        return res.sendFile(fPath);
-      }
-    }
-  }
-
-  // 2. Look up product in productsCache or fetch from Google Sheet
-  try {
-    const products = await fetchProductsFromSheet();
-    // Match by ID first, then by Title/Name if query wasn't an exact ID
-    let matchedProduct = products.find(p => {
-      const pClean = p.id.replace(/^(id[-_])?/i, "");
-      return p.id.toLowerCase() === rawId.toLowerCase() || 
-             pClean.toLowerCase() === cleanId.toLowerCase() ||
-             p.id.toLowerCase() === `id-${cleanId}`.toLowerCase();
-    });
-
-    if (!matchedProduct) {
-      // Try match by product name / title (exact or trimmed)
-      matchedProduct = products.find(p => {
-        return p.name.trim().toLowerCase() === rawId.toLowerCase() ||
-               p.name.trim().toLowerCase().includes(rawId.toLowerCase()) ||
-               rawId.toLowerCase().includes(p.name.trim().toLowerCase());
-      });
-    }
-
-    if (matchedProduct) {
-      const mCleanId = matchedProduct.id.replace(/^(id[-_])?/i, "");
-      const matchedLocalPath = path.join(publicDir, `id-${mCleanId}.jpg`);
-
-      // Check if matched product already has a file
-      if (fs.existsSync(matchedLocalPath) && fs.statSync(matchedLocalPath).size > 0) {
-        res.setHeader("Content-Type", "image/jpeg");
-        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-        return res.sendFile(matchedLocalPath);
-      }
-
-      // If no local file yet, fetch from product's Image URLs
-      const imgUrl = matchedProduct.extraAttributes?.["Image URLs"] || 
-                     (matchedProduct.allValues ? matchedProduct.allValues[38] : "");
-      if (imgUrl && String(imgUrl).startsWith("http")) {
-        const fetchRes = await fetch(String(imgUrl).trim(), {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
-          }
-        });
-        if (fetchRes.ok) {
-          const buf = Buffer.from(await fetchRes.arrayBuffer());
-          if (buf.length > 0) {
-            fs.writeFileSync(matchedLocalPath, buf);
-            res.setHeader("Content-Type", "image/jpeg");
-            res.setHeader("Cache-Control", "public, max-age=31536000");
-            return res.send(buf);
-          }
-        }
-      }
-    }
-  } catch (err: any) {
-    console.error("Error during product image lookup:", err.message);
-  }
-
-  // 3. Next, try on-demand fetch from Sheet15 mapping
-  try {
-    const sheet15Map = await getSheet15ImageMap();
-    const imgUrl = sheet15Map.get(rawId.toLowerCase()) || sheet15Map.get(`id-${cleanId}`.toLowerCase()) || sheet15Map.get(cleanId.toLowerCase());
-    if (imgUrl) {
-      const fetchRes = await fetch(imgUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept": "image/*,*/*;q=0.8"
-        }
-      });
-      if (fetchRes.ok) {
-        const buf = Buffer.from(await fetchRes.arrayBuffer());
-        if (buf.length > 0) {
-          const savePath = path.join(publicDir, `id-${cleanId}.jpg`);
-          fs.writeFileSync(savePath, buf);
-          res.setHeader("Content-Type", "image/jpeg");
-          res.setHeader("Cache-Control", "public, max-age=31536000");
-          return res.send(buf);
-        }
-      }
-    }
-  } catch (_) {}
-
-  // Fallback to 404
-  return res.status(404).send("Product image not found");
-});
-
-app.post("/api/upload-image", async (req, res) => {
-  try {
-    const { filename, base64 } = req.body;
-    if (!filename || !base64) {
-      return res.status(400).json({ error: "Filename and base64 data are required" });
-    }
-
-    // Clean filename to prevent directory traversal attacks
-    const safeFilename = path.basename(filename);
-    if (!/\.(jpg|jpeg|png|gif|webp)$/i.test(safeFilename)) {
-      return res.status(400).json({ error: "Invalid file extension. Standard web images only." });
-    }
-
-    // Remove data-uri scheme (e.g. data:image/jpeg;base64,) if present
-    const cleanBase64 = base64.replace(/^data:image\/\w+;base64,/, "");
-    const buffer = Buffer.from(cleanBase64, "base64");
-
-    const publicDir = path.join(process.cwd(), "public");
-    if (!fs.existsSync(publicDir)) {
-      fs.mkdirSync(publicDir, { recursive: true });
-    }
-
-    const filePath = path.join(publicDir, safeFilename);
-
-    // Save locally as quick-access cache / fallback
-    fs.writeFileSync(filePath, buffer);
-
-    if (isGcsAvailable()) {
-      try {
-        console.log(`[GCS Sync Client] Initiating bucket upload for: ${safeFilename}`);
-        const command = new PutObjectCommand({
-          Bucket: bucketName,
-          Key: safeFilename,
-          Body: buffer,
-          ContentType: getMimeType(safeFilename),
-        });
-        await s3Client.send(command);
-        console.log(`[GCS Sync Client] Successfully uploaded to GCS: ${safeFilename}`);
-      } catch (gcsError: any) {
-        handleGcsError(gcsError, "upload-image");
-      }
-    } else {
-      console.log(`Saved customer product image locally: ${safeFilename}`);
-    }
-
-    res.json({ success: true, url: `/${safeFilename}` });
-  } catch (error: any) {
-    console.error("Upload error:", error);
-    res.status(500).json({ error: error.message || "Failed to save file." });
-  }
-});
-
-function getSymbolForCategoryName(catName: string, symbolToName: Record<string, string>): string {
-  const normalized = (catName || "").trim().toLowerCase();
-  
-  if (normalized.includes("奶粉")) return "M";
-  if (normalized.includes("尿片")) return "D";
-  if (normalized.includes("中成藥")) return "C";
-  if (normalized.includes("外用品") || normalized.includes("外用")) return "E";
-  if (normalized.includes("食品") || normalized.includes("飲品")) return "F";
-  if (normalized.includes("家品")) return "H";
-  if (normalized.includes("保健") || normalized.includes("品牌保健")) return "S";
-  if (normalized.includes("藥品") || normalized.includes("成藥")) return "W";
-  if (normalized.includes("px")) return "X";
-
-  for (const [sym, name] of Object.entries(symbolToName)) {
-    const nameNorm = name.toLowerCase();
-    if (normalized.includes(nameNorm) || nameNorm.includes(normalized)) {
-      return sym;
-    }
-  }
-  return "S"; // default fallback is S (保健)
-}
-
-app.post("/api/products", async (req, res) => {
-  try {
-    const { id, name, price, quantity, remarks, categories, base64Image, category, showOnPdf } = req.body;
-    if (!name) {
-      return res.status(400).json({ error: "Name is required" });
-    }
-
-    const finalRemarks = (remarks !== undefined && remarks !== null) 
-      ? String(remarks) 
-      : ((categories !== undefined && categories !== null) ? String(categories) : "");
-
-    const finalId = id ? id.trim() : `id-${Math.floor(1000000000000000 + Math.random() * 9000000000000000)}`;
-
-    if (base64Image) {
-      const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
-      const buffer = Buffer.from(cleanBase64, "base64");
-      const publicDir = path.join(process.cwd(), "public");
-      if (!fs.existsSync(publicDir)) {
-        fs.mkdirSync(publicDir, { recursive: true });
-      }
-      const filePath = path.join(publicDir, `${finalId}.jpg`);
-      fs.writeFileSync(filePath, buffer);
-      console.log(`Saved newly added product image: ${finalId}.jpg`);
-    }
-
-    const qtyNumber = parseInt(quantity, 10);
-    const hasStock = isNaN(qtyNumber) ? true : qtyNumber > 0;
-    const secondaryStockCount = isNaN(qtyNumber) ? "" : qtyNumber.toString();
-
-    let catSymbol = "";
-    let catName = "";
-    try {
-      const costCategories = await fetchCostCategories();
-      catSymbol = getSymbolForCategoryName(category || "", costCategories.symbolToName);
-      catName = costCategories.symbolToName[catSymbol] || category || "";
-    } catch (e) {
-      console.error("Error determining category for manual add:", e);
-    }
-
-    // Per user instruction: When '建立商品' is pressed, input '0' to Col AE ('show of pdf') and Col AF ('list')
-    const showOnPdfVal = "0";
-    const listVal = "0";
-
-    const allVals = new Array(33).fill("");
-    allVals[1] = finalId;
-    allVals[2] = name;
-    allVals[12] = finalRemarks || ""; // Col M (13th column, 0-indexed: 12, Header: Categories)
-    allVals[14] = price || "0";
-    allVals[27] = (isNaN(qtyNumber) || quantity === "") ? "1" : "0";
-    allVals[28] = secondaryStockCount;
-    allVals[29] = "";
-    allVals[30] = showOnPdfVal; // Col AE (31st column): Header as 'show of pdf' -> '0'
-    allVals[31] = listVal;       // Col AF (32nd column): Header as 'list' -> '0'
-
-    const newProduct = {
-      id: finalId,
-      name,
-      price: price || "0",
-      hasStock,
-      alwaysStock: isNaN(qtyNumber) || quantity === "",
-      secondaryStockCount,
-      extraAttributes: {
-        "Categories": finalRemarks || "",
-        "Categories/分類": finalRemarks || "",
-        "Merchant Remark": finalRemarks || "",
-        "remarks": finalRemarks || "",
-        "show on pdf": showOnPdfVal,
-        "show of pdf": showOnPdfVal,
-        "list": listVal
-      },
-      costCategorySymbol: catSymbol,
-      costCategoryName: catName,
-      allValues: allVals
-    };
-
-    const localProducts = getLocalProducts();
-    localProducts.unshift(newProduct);
-    saveLocalProducts(localProducts);
-
-    // Sync to Google Sheet if enabled - we pass catSymbol as 10th parameter, showOnPdfVal ("0") as 11th parameter, and listVal ("0") as 17th parameter
-    triggerSheetsSync(
-      finalId, 
-      name, 
-      price || "0", 
-      quantity, 
-      finalRemarks || "", 
-      "addProduct", 
-      undefined, 
-      undefined, 
-      undefined, 
-      catSymbol, 
-      showOnPdfVal,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      listVal
-    );
-
-    res.json({ success: true, product: newProduct });
-  } catch (error: any) {
-    console.error("Error adding product:", error);
-    res.status(500).json({ error: error.message || "Failed to add product" });
-  }
-});
-
-// Batch Inbound Restock endpoint (來貨記錄)
-app.post("/api/products/batch-restock", async (req, res) => {
-  try {
-    const { items } = req.body;
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: "Items array is required" });
-    }
-
-    let localProducts = getLocalProducts();
-    const updatedProducts: any[] = [];
-    const addedPurchases: PurchaseLog[] = [];
-
-    const nowFormatted = new Date().toLocaleString("zh-HK", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false
-    }).replace(/\//g, "-");
-
-    for (const item of items) {
-      const { id, name, addQuantity, changeDate } = item;
-      const addNum = parseInt(addQuantity, 10);
-      if (isNaN(addNum) || addNum <= 0) continue;
-
-      const existingIndex = localProducts.findIndex((p: any) => p.id === id);
-      let existingProduct = existingIndex !== -1 ? localProducts[existingIndex] : null;
-
-      if (!existingProduct) {
-        existingProduct = productsCache.find((p: any) => p.id === id);
-        if (!existingProduct && fs.existsSync("products_backup.json")) {
-          try {
-            const backup = JSON.parse(fs.readFileSync("products_backup.json", "utf-8"));
-            existingProduct = backup.find((p: any) => p.id === id);
-          } catch {}
-        }
-      }
-
-      // Calculate previous stock
-      let previousStockDisplay: string | number = "長期充足";
-      let prevNumericStock = 0;
-      if (existingProduct) {
-        if (!existingProduct.alwaysStock && existingProduct.secondaryStockCount !== "" && existingProduct.secondaryStockCount !== undefined) {
-          previousStockDisplay = !isNaN(Number(existingProduct.secondaryStockCount)) ? Number(existingProduct.secondaryStockCount) : existingProduct.secondaryStockCount;
-          prevNumericStock = parseFloat(existingProduct.secondaryStockCount) || 0;
-        } else if (existingProduct.hasStock === false) {
-          previousStockDisplay = 0;
-          prevNumericStock = 0;
-        } else {
-          previousStockDisplay = "長期充足";
-          prevNumericStock = 0;
-        }
-      }
-
-      const newNumericStock = prevNumericStock + addNum;
-      const newStockDisplay = newNumericStock;
-      const finalQuantityFrom = item.quantityFrom !== undefined ? item.quantityFrom : previousStockDisplay;
-      const finalQuantityTo = item.quantityTo !== undefined ? item.quantityTo : newStockDisplay;
-      const finalNet = item.net !== undefined ? Number(item.net) : addNum;
-      const recordDate = changeDate || nowFormatted;
-
-      // Create purchase record
-      const purchaseRecord: PurchaseLog = {
-        id: `pur-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        date: recordDate,
-        product: name || existingProduct?.name || id,
-        quantityFrom: finalQuantityFrom,
-        quantityTo: finalQuantityTo,
-        net: finalNet
-      };
-      addPurchaseRecord(purchaseRecord);
-      addedPurchases.push(purchaseRecord);
-
-      // Update product record
-      const finalPrice = existingProduct?.price || "0";
-      const finalPriceA = existingProduct?.priceA || finalPrice;
-      const finalPriceB = existingProduct?.priceB || finalPrice;
-      const finalPriceC = existingProduct?.priceC || finalPrice;
-      const remarks = existingProduct?.extraAttributes?.["Merchant Remark"] || existingProduct?.extraAttributes?.["remarks"] || existingProduct?.extraAttributes?.["Categories"] || "";
-      const showOnPdf = existingProduct?.extraAttributes?.["show on pdf"] || "0";
-
-      if (existingIndex !== -1) {
-        const updatedAllValues = [...(localProducts[existingIndex].allValues || [])];
-        while (updatedAllValues.length < 31) updatedAllValues.push("");
-        updatedAllValues[27] = "0"; // not unlimited anymore
-        updatedAllValues[28] = newNumericStock.toString();
-        localProducts[existingIndex] = {
-          ...localProducts[existingIndex],
-          hasStock: true,
-          alwaysStock: false,
-          secondaryStockCount: newNumericStock.toString(),
-          allValues: updatedAllValues
-        };
-        updatedProducts.push(localProducts[existingIndex]);
-      } else {
-        const updatedAllValues = [...(existingProduct?.allValues || [])];
-        while (updatedAllValues.length < 31) updatedAllValues.push("");
-        updatedAllValues[27] = "0";
-        updatedAllValues[28] = newNumericStock.toString();
-
-        const updated = {
-          ...(existingProduct || {}),
-          id,
-          name: name || existingProduct?.name || id,
-          price: finalPrice,
-          priceA: finalPriceA,
-          priceB: finalPriceB,
-          priceC: finalPriceC,
-          hasStock: true,
-          alwaysStock: false,
-          secondaryStockCount: newNumericStock.toString(),
-          allValues: updatedAllValues
-        };
-        localProducts.unshift(updated);
-        updatedProducts.push(updated);
-      }
-
-      // Sync to Google Sheet if enabled
-      triggerSheetsSync(
-        id,
-        name || existingProduct?.name || id,
-        finalPrice,
-        newNumericStock.toString(),
-        remarks,
-        "updateProduct",
-        finalPriceA,
-        finalPriceB,
-        finalPriceC,
-        undefined,
-        showOnPdf,
-        true, // stockChanged
-        finalQuantityFrom,
-        finalQuantityTo,
-        finalNet,
-        recordDate
-      );
-    }
-
-    saveLocalProducts(localProducts);
-
-    res.json({
-      success: true,
-      updatedCount: updatedProducts.length,
-      purchasesCount: addedPurchases.length,
-      products: updatedProducts
-    });
-  } catch (error: any) {
-    console.error("Batch restock error:", error);
-    res.status(500).json({ error: error.message || "Failed to batch restock" });
-  }
-});
-
-app.put("/api/products/:id", (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, price, priceA, priceB, priceC, quantity, remarks, categories, base64Image, showOnPdf, stockChanged, quantityFrom, quantityTo, net, changeDate } = req.body;
-    const finalRemarks = remarks !== undefined ? remarks : (categories !== undefined ? categories : undefined);
-    console.log(`[PUT /api/products/${id}] Received body:`, { name, price, priceA, priceB, priceC, quantity, remarks: finalRemarks, showOnPdf, stockChanged, quantityFrom, quantityTo, net });
-    if (!name) {
-      return res.status(400).json({ error: "Name is required" });
-    }
-
-    if (base64Image) {
-      const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
-      const buffer = Buffer.from(cleanBase64, "base64");
-      const publicDir = path.join(process.cwd(), "public");
-      if (!fs.existsSync(publicDir)) {
-        fs.mkdirSync(publicDir, { recursive: true });
-      }
-      const filePath = path.join(publicDir, `${id}.jpg`);
-      fs.writeFileSync(filePath, buffer);
-      console.log(`Saved updated product image: ${id}.jpg`);
-    }
-
-    const qtyNumber = parseInt(quantity, 10);
-    const hasStock = isNaN(qtyNumber) ? true : qtyNumber > 0;
-    const secondaryStockCount = isNaN(qtyNumber) ? "" : qtyNumber.toString();
-    const alwaysStock = isNaN(qtyNumber) || quantity === "";
-
-    const finalPrice = price || "0";
-    const finalPriceA = (priceA !== undefined && priceA.toString().trim() !== "") ? priceA.toString().trim() : finalPrice;
-    const finalPriceB = (priceB !== undefined && priceB.toString().trim() !== "") ? priceB.toString().trim() : finalPrice;
-    const finalPriceC = (priceC !== undefined && priceC.toString().trim() !== "") ? priceC.toString().trim() : finalPrice;
-
-    const showOnPdfVal = (showOnPdf === false || showOnPdf === "N") ? "N" : (showOnPdf === true || showOnPdf === "0" || showOnPdf === "Y" ? "0" : undefined);
-
-    let localProducts = getLocalProducts();
-    const existingIndex = localProducts.findIndex((p: any) => p.id === id);
-
-    // Retrieve previous stock info to calculate change
-    let previousStockDisplay: string | number = "長期充足";
-    let prevNumericStock = 0;
-    const existingProduct = existingIndex !== -1 
-      ? localProducts[existingIndex] 
-      : (productsCache.find((p: any) => p.id === id) || (fs.existsSync("products_backup.json") ? (() => {
-          try {
-            return JSON.parse(fs.readFileSync("products_backup.json", "utf-8")).find((p: any) => p.id === id);
-          } catch {
-            return null;
-          }
-        })() : null));
-
-    if (existingProduct) {
-      if (!existingProduct.alwaysStock && existingProduct.secondaryStockCount !== "" && existingProduct.secondaryStockCount !== undefined) {
-        previousStockDisplay = !isNaN(Number(existingProduct.secondaryStockCount)) ? Number(existingProduct.secondaryStockCount) : existingProduct.secondaryStockCount;
-        prevNumericStock = parseFloat(existingProduct.secondaryStockCount) || 0;
-      } else if (existingProduct.hasStock === false) {
-        previousStockDisplay = 0;
-        prevNumericStock = 0;
-      } else {
-        previousStockDisplay = "長期充足";
-        prevNumericStock = 0;
-      }
-    }
-
-    const newStockDisplay: string | number = alwaysStock ? "長期充足" : (isNaN(qtyNumber) ? quantity : qtyNumber);
-    const newNumericStock = isNaN(qtyNumber) ? 0 : qtyNumber;
-
-    // Detect if stock changed
-    const isStockChanged = stockChanged !== undefined 
-      ? !!stockChanged 
-      : (quantityFrom !== undefined && quantityTo !== undefined 
-          ? String(quantityFrom).trim() !== String(quantityTo).trim()
-          : String(previousStockDisplay).trim() !== String(newStockDisplay).trim());
-
-    const finalQuantityFrom = quantityFrom !== undefined ? quantityFrom : previousStockDisplay;
-    const finalQuantityTo = quantityTo !== undefined ? quantityTo : newStockDisplay;
-    const finalNet = net !== undefined ? Number(net) : (newNumericStock - prevNumericStock);
-    const recordDate = changeDate || new Date().toLocaleString("zh-HK", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false
-    }).replace(/\//g, "-");
-
-    // Record into 'Purchase' log if stock changed
-    if (isStockChanged) {
-      const purchaseRecord: PurchaseLog = {
-        id: `pur-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        date: recordDate,
-        product: name,
-        quantityFrom: finalQuantityFrom,
-        quantityTo: finalQuantityTo,
-        net: finalNet
-      };
-      addPurchaseRecord(purchaseRecord);
-      console.log(`[Purchase Log Added]:`, purchaseRecord);
-    }
-
-    if (existingIndex !== -1) {
-      const updatedAllValues = [...(localProducts[existingIndex].allValues || [])];
-      while (updatedAllValues.length < 33) {
-        updatedAllValues.push("");
-      }
-      updatedAllValues[2] = name;
-      if (finalRemarks !== undefined) {
-        updatedAllValues[12] = finalRemarks; // Col M (Header: Categories)
-      }
-      updatedAllValues[14] = finalPrice;
-      updatedAllValues[17] = finalPriceA;
-      updatedAllValues[18] = finalPriceB;
-      updatedAllValues[19] = finalPriceC;
-      updatedAllValues[27] = alwaysStock ? "1" : "0";
-      updatedAllValues[28] = secondaryStockCount;
-      if (showOnPdfVal !== undefined) {
-        updatedAllValues[30] = showOnPdfVal;
-      }
-      // Update existing local product
-      localProducts[existingIndex] = {
-        ...localProducts[existingIndex],
-        name,
-        price: finalPrice,
-        priceA: finalPriceA,
-        priceB: finalPriceB,
-        priceC: finalPriceC,
-        hasStock,
-        alwaysStock,
-        secondaryStockCount,
-        extraAttributes: {
-          ...(localProducts[existingIndex]?.extraAttributes || {}),
-          ...(finalRemarks !== undefined ? { "Categories": finalRemarks, "Categories/分類": finalRemarks, "Merchant Remark": finalRemarks, "remarks": finalRemarks } : {}),
-          ...(showOnPdfVal !== undefined ? { "show on pdf": showOnPdfVal } : {})
-        },
-        allValues: updatedAllValues
-      };
-    } else {
-      // It was a sheet product. Find it from sheet/backup cache and overwrite
-      let sheetProduct = productsCache.find((p: any) => p.id === id);
-      if (!sheetProduct && fs.existsSync("products_backup.json")) {
-        try {
-          const backup = JSON.parse(fs.readFileSync("products_backup.json", "utf-8"));
-          sheetProduct = backup.find((p: any) => p.id === id);
-        } catch (e) {
-          console.error("Failed to read backup for find product:", e);
-        }
-      }
-
-      const updatedAllValues = [...(sheetProduct?.allValues || [])];
-      while (updatedAllValues.length < 33) {
-        updatedAllValues.push("");
-      }
-      updatedAllValues[2] = name;
-      if (finalRemarks !== undefined) {
-        updatedAllValues[12] = finalRemarks; // Col M (Header: Categories)
-      }
-      updatedAllValues[14] = finalPrice;
-      updatedAllValues[17] = finalPriceA;
-      updatedAllValues[18] = finalPriceB;
-      updatedAllValues[19] = finalPriceC;
-      updatedAllValues[27] = alwaysStock ? "1" : "0";
-      updatedAllValues[28] = secondaryStockCount;
-      if (showOnPdfVal !== undefined) {
-        updatedAllValues[30] = showOnPdfVal;
-      }
-
-      const updatedProduct = {
-        id,
-        name,
-        price: finalPrice,
-        priceA: finalPriceA,
-        priceB: finalPriceB,
-        priceC: finalPriceC,
-        hasStock,
-        alwaysStock,
-        secondaryStockCount,
-        extraAttributes: {
-          ...(sheetProduct?.extraAttributes || {}),
-          ...(finalRemarks !== undefined ? { "Categories": finalRemarks, "Categories/分類": finalRemarks, "Merchant Remark": finalRemarks, "remarks": finalRemarks } : {}),
-          ...(showOnPdfVal !== undefined ? { "show on pdf": showOnPdfVal } : {})
-        },
-        allValues: updatedAllValues
-      };
-
-      localProducts.unshift(updatedProduct);
-    }
-
-    saveLocalProducts(localProducts);
-
-    // Sync to Google Sheet if enabled, including Purchase tab log if stock changed
-    triggerSheetsSync(
-      id, 
-      name, 
-      finalPrice, 
-      quantity, 
-      finalRemarks !== undefined ? finalRemarks : (remarks || ""), 
-      "updateProduct", 
-      finalPriceA, 
-      finalPriceB, 
-      finalPriceC, 
-      undefined, 
-      showOnPdfVal,
-      isStockChanged,
-      finalQuantityFrom,
-      finalQuantityTo,
-      finalNet,
-      recordDate
-    );
-
-    res.json({ success: true, message: "Product updated successfully" });
-  } catch (error: any) {
-    console.error("Error updating product:", error);
-    res.status(500).json({ error: error.message || "Failed to update product" });
-  }
-});
-
-let soldDataCache: Record<string, number> | null = null;
-let lastSoldFetchTime = 0;
-const SOLD_CACHE_DURATION = 15 * 60 * 1000; // 15 minutes (900 seconds)
-
-async function fetchSoldDataFromSheet() {
-  const now = Date.now();
-  if (soldDataCache && (now - lastSoldFetchTime) < SOLD_CACHE_DURATION) {
-    return soldDataCache;
-  }
-
-  const url = "https://docs.google.com/spreadsheets/d/10gGU4ZZH_qUKwYklfIK0sQFNCUCfUc36C3SpkfUoQlA/export?format=csv";
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch Sold Sheet: ${response.statusText}`);
-    }
-    const csvText = await response.text();
-    const rows = parseCSV(csvText);
-
-    if (rows.length < 2) {
-      throw new Error("Sold CSV does not contain sufficient rows");
-    }
-
-    const soldMap: Record<string, number> = {};
-    const dataRows = rows.slice(1);
-    
-    // Calculate reference boundaries based on actual system/local date
-    const currentDate = new Date();
-    const twoWeeksAgo = new Date(currentDate.getTime() - 14 * 24 * 60 * 60 * 1000);
-
-    dataRows.forEach((row) => {
-      if (row.length < 6) return;
-      const dateStr = row[0];
-      const name = (row[1] || "").trim();
-      const qtyStr = row[3];
-      const refStr = row[5];
-
-      if (!name) return;
-
-      const dateObj = new Date(dateStr.trim());
-      if (isNaN(dateObj.getTime())) return;
-
-      // Filter for items sold within the last 14 days
-      if (dateObj >= twoWeeksAgo && dateObj <= currentDate) {
-        const qty = parseFloat(qtyStr) || 0;
-        const ref = parseFloat(refStr) || 0;
-        const totalSold = qty * ref;
-
-        if (totalSold > 0) {
-          soldMap[name] = (soldMap[name] || 0) + totalSold;
-        }
-      }
-    });
-
-    soldDataCache = soldMap;
-    lastSoldFetchTime = now;
-    return soldMap;
-  } catch (error) {
-    console.error("fetchSoldDataFromSheet error:", error);
-    return soldDataCache || {};
-  }
-}
-
-// ==========================================
-// Stock History Tracking Integration
-// Sources: 
-//  1. 'Purchase 庫存異動記錄' (gid=47411987 + local backup)
-//  2. 'Trade_Log' (gid=1412322886 + backupTradeUrl)
-//  3. 'Trade_log_admin' (gid=2071438386)
-// ==========================================
-
-interface StockHistoryEvent {
-  id: string;
-  source: "Purchase" | "Trade_Log" | "Trade_log_admin";
-  sourceLabel: string;
-  date: string;
-  formattedDate: string;
-  timestamp: number;
-  change: number;
-  stockLevel: number | string;
-  quantityFrom?: string | number;
-  quantityTo?: string | number;
-  customer?: string;
-  district?: string;
-  user?: string;
-  orderId?: string;
-  unit?: string;
-  quantity?: number;
-  refMultiplier?: number;
-  totalUnits?: number;
-  price?: number;
-  subtotal?: number;
-  remarks?: string;
-}
-
-let stockHistoryCache: {
-  timestamp: number;
-  purchaseRows: any[];
-  tradeLogRows: any[];
-  tradeLogAdminRows: any[];
-  backupTradeRows: any[];
-} | null = null;
-
-function parseStockEventDate(dateStr: string): { timestamp: number; displayDate: string } {
-  if (!dateStr) return { timestamp: 0, displayDate: "未知時間" };
-  const trimmed = dateStr.trim();
-
-  // Check DD-MMM-YY (e.g. 02-Jun-26)
-  const ddMmmYyMatch = trimmed.match(/^(\d{1,2})[-/]([A-Za-z]{3})[-/](\d{2,4})/);
-  if (ddMmmYyMatch) {
-    const day = parseInt(ddMmmYyMatch[1], 10);
-    const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
-    const month = monthNames.indexOf(ddMmmYyMatch[2].toLowerCase());
-    let year = parseInt(ddMmmYyMatch[3], 10);
-    if (year < 100) year += 2000;
-    if (month !== -1) {
-      const d = new Date(year, month, day, 12, 0, 0);
-      return {
-        timestamp: d.getTime(),
-        displayDate: `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`
-      };
-    }
-  }
-
-  // Check DD-MM-YYYY HH:mm:ss or DD-MM-YYYY
-  const ddmmyyyyMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
-  if (ddmmyyyyMatch) {
-    const day = parseInt(ddmmyyyyMatch[1], 10);
-    const month = parseInt(ddmmyyyyMatch[2], 10) - 1;
-    const year = parseInt(ddmmyyyyMatch[3], 10);
-    const hour = parseInt(ddmmyyyyMatch[4] || "0", 10);
-    const min = parseInt(ddmmyyyyMatch[5] || "0", 10);
-    const sec = parseInt(ddmmyyyyMatch[6] || "0", 10);
-    const d = new Date(year, month, day, hour, min, sec);
-    return {
-      timestamp: d.getTime(),
-      displayDate: `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")} ${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`
-    };
-  }
-
-  // Check YYYY/MM/DD or YYYY-MM-DD
-  const yyyymmddMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
-  if (yyyymmddMatch) {
-    const year = parseInt(yyyymmddMatch[1], 10);
-    const month = parseInt(yyyymmddMatch[2], 10) - 1;
-    const day = parseInt(yyyymmddMatch[3], 10);
-    const hour = parseInt(yyyymmddMatch[4] || "0", 10);
-    const min = parseInt(yyyymmddMatch[5] || "0", 10);
-    const sec = parseInt(yyyymmddMatch[6] || "0", 10);
-    const d = new Date(year, month, day, hour, min, sec);
-    return {
-      timestamp: d.getTime(),
-      displayDate: `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")} ${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`
-    };
-  }
-
-  const d = new Date(trimmed);
-  if (!isNaN(d.getTime())) {
-    return {
-      timestamp: d.getTime(),
-      displayDate: d.toLocaleString("zh-HK", { hour12: false })
-    };
-  }
-
-  return { timestamp: 0, displayDate: trimmed };
-}
-
-function normalizeProductName(str: string): string {
-  if (!str) return "";
-  return str.toString().toLowerCase().replace(/[\s\t\r\n（）()【】\[\]\-—_]/g, "");
-}
-
-async function fetchRawStockSheets(forceRefresh = false) {
-  const now = Date.now();
-  if (!forceRefresh && stockHistoryCache && (now - stockHistoryCache.timestamp < 30000)) {
-    return stockHistoryCache;
-  }
-
-  const tradeLogUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=1412322886";
-  const adminUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=2071438386";
-  const purchaseUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?output=csv&gid=47411987";
-  const backupTradeUrl = "https://docs.google.com/spreadsheets/d/10gGU4ZZH_qUKwYklfIK0sQFNCUCfUc36C3SpkfUoQlA/export?format=csv";
-
-  const [tRes, aRes, pRes, bRes] = await Promise.all([
-    fetch(tradeLogUrl).catch(() => null),
-    fetch(adminUrl).catch(() => null),
-    fetch(purchaseUrl).catch(() => null),
-    fetch(backupTradeUrl).catch(() => null)
-  ]);
-
-  const [tTxt, aTxt, pTxt, bTxt] = await Promise.all([
-    tRes && tRes.ok ? tRes.text() : Promise.resolve(""),
-    aRes && aRes.ok ? aRes.text() : Promise.resolve(""),
-    pRes && pRes.ok ? pRes.text() : Promise.resolve(""),
-    bRes && bRes.ok ? bRes.text() : Promise.resolve("")
-  ]);
-
-  const tradeLogRows = tTxt ? parseCSV(tTxt).slice(1) : [];
-  const tradeLogAdminRows = aTxt ? parseCSV(aTxt).slice(1) : [];
-  const purchaseRows = pTxt ? parseCSV(pTxt).slice(1) : [];
-  const backupTradeRows = bTxt ? parseCSV(bTxt).slice(1) : [];
-
-  stockHistoryCache = {
-    timestamp: now,
-    purchaseRows,
-    tradeLogRows,
-    tradeLogAdminRows,
-    backupTradeRows
-  };
-
-  return stockHistoryCache;
-}
-
-async function getStockHistoryForProduct(queryId: string, queryName: string, forceRefresh = false) {
-  const { purchaseRows, tradeLogRows, tradeLogAdminRows, backupTradeRows } = await fetchRawStockSheets(forceRefresh);
-
-  const cleanQueryId = (queryId || "").trim().toLowerCase().replace(/^id-/, "");
-  const normQueryName = normalizeProductName(queryName);
-
-  const isMatch = (rowId?: string, rowName?: string) => {
-    if (rowId && cleanQueryId) {
-      const cleanRowId = rowId.trim().toLowerCase().replace(/^id-/, "");
-      if (cleanRowId && cleanRowId === cleanQueryId) return true;
-    }
-    if (!rowName || !normQueryName) return false;
-    const normRow = normalizeProductName(rowName);
-    return normRow === normQueryName || normRow.includes(normQueryName) || normQueryName.includes(normRow);
-  };
-
-  const events: StockHistoryEvent[] = [];
-  const seenEventKeys = new Set<string>();
-
-  // 1. Process Purchase rows (Google Sheet gid=47411987 + local backup)
-  const allPurchaseRecords: any[] = [];
-  purchaseRows.forEach((r, idx) => {
-    if (isMatch("", r[1])) {
-      allPurchaseRecords.push({
-        date: r[0],
-        product: r[1],
-        quantityFrom: r[2],
-        quantityTo: r[3],
-        net: r[4],
-        sourceId: `gs-pur-${idx}`
-      });
-    }
-  });
-
-  const localPurchases = getPurchases();
-  localPurchases.forEach((lp, idx) => {
-    if (isMatch("", lp.product)) {
-      allPurchaseRecords.push({
-        date: lp.date,
-        product: lp.product,
-        quantityFrom: lp.quantityFrom,
-        quantityTo: lp.quantityTo,
-        net: lp.net,
-        sourceId: lp.id || `local-pur-${idx}`
-      });
-    }
-  });
-
-  allPurchaseRecords.forEach(rec => {
-    const { timestamp, displayDate } = parseStockEventDate(rec.date);
-    const key = `Purchase-${timestamp}-${rec.quantityTo}-${rec.net}`;
-    if (!seenEventKeys.has(key)) {
-      seenEventKeys.add(key);
-      const netChange = typeof rec.net === "number" ? rec.net : parseFloat(rec.net) || 0;
-      events.push({
-        id: `pur-${timestamp}-${Math.random().toString(36).substr(2, 5)}`,
-        source: "Purchase",
-        sourceLabel: "Purchase 庫存異動記錄",
-        date: rec.date,
-        formattedDate: displayDate,
-        timestamp,
-        change: netChange,
-        stockLevel: rec.quantityTo !== undefined ? rec.quantityTo : 0,
-        quantityFrom: rec.quantityFrom,
-        quantityTo: rec.quantityTo,
-        remarks: netChange >= 0 ? `來貨/進貨增加 +${netChange}` : `庫存調整扣減 ${netChange}`
-      });
-    }
-  });
-
-  // 2. Process Trade_Log (gid=1412322886)
-  tradeLogRows.forEach((r, idx) => {
-    if (isMatch(r[2], r[1])) {
-      const { timestamp, displayDate } = parseStockEventDate(r[0]);
-      const qty = parseFloat(r[3]) || 0;
-      const ref = parseFloat(r[5]) || 1;
-      const totalUnits = qty * ref;
-      const customer = (r[7] || "").trim();
-      const orderId = (r[12] || r[11] || "").trim();
-      const user = (r[10] || "").trim();
-
-      const key = `TradeLog-${timestamp}-${customer}-${totalUnits}-${orderId}`;
-      if (!seenEventKeys.has(key)) {
-        seenEventKeys.add(key);
-        events.push({
-          id: `tl-${idx}-${timestamp}`,
-          source: "Trade_Log",
-          sourceLabel: "Trade_Log 客戶銷售訂單",
-          date: r[0],
-          formattedDate: displayDate,
-          timestamp,
-          change: -totalUnits,
-          stockLevel: 0,
-          customer,
-          district: (r[8] || "").trim(),
-          user,
-          orderId,
-          unit: (r[4] || "件").trim(),
-          quantity: qty,
-          refMultiplier: ref,
-          totalUnits,
-          price: parseFloat(r[6]) || 0,
-          subtotal: parseFloat(r[9]) || 0,
-          remarks: `客戶訂購: ${qty} ${r[4] || "件"} (換算 ${totalUnits} 件)`
-        });
-      }
-    }
-  });
-
-  // 3. Process backupTradeRows (from 10gGU... sheet)
-  backupTradeRows.forEach((r, idx) => {
-    if (isMatch("", r[1])) {
-      const { timestamp, displayDate } = parseStockEventDate(r[0]);
-      const qty = parseFloat(r[3]) || 0;
-      const ref = parseFloat(r[5]) || 1;
-      const totalUnits = qty * ref;
-      const customer = (r[7] || "").trim();
-      const orderId = (r[11] || "").trim();
-      const user = (r[10] || "").trim();
-
-      const key = `TradeLog-${timestamp}-${customer}-${totalUnits}-${orderId}`;
-      if (!seenEventKeys.has(key)) {
-        seenEventKeys.add(key);
-        events.push({
-          id: `tl-bak-${idx}-${timestamp}`,
-          source: "Trade_Log",
-          sourceLabel: "Trade_Log 客戶銷售訂單",
-          date: r[0],
-          formattedDate: displayDate,
-          timestamp,
-          change: -totalUnits,
-          stockLevel: 0,
-          customer,
-          district: (r[8] || "").trim(),
-          user,
-          orderId,
-          unit: (r[4] || "件").trim(),
-          quantity: qty,
-          refMultiplier: ref,
-          totalUnits,
-          price: parseFloat(r[6]) || 0,
-          subtotal: parseFloat(r[9]) || 0,
-          remarks: `歷史訂單: ${qty} ${r[4] || "件"} (換算 ${totalUnits} 件)`
-        });
-      }
-    }
-  });
-
-  // 4. Process Trade_log_admin (gid=2071438386)
-  tradeLogAdminRows.forEach((r, idx) => {
-    if (isMatch(r[2], r[1])) {
-      const { timestamp, displayDate } = parseStockEventDate(r[0]);
-      const qty = parseFloat(r[3]) || 0;
-      const ref = parseFloat(r[5]) || 1;
-      const totalUnits = qty * ref;
-      const customer = (r[7] || "").trim();
-      const orderId = (r[12] || r[11] || "").trim();
-      const user = (r[10] || "Admin").trim();
-
-      const key = `TradeLogAdmin-${timestamp}-${customer}-${totalUnits}-${orderId}`;
-      if (!seenEventKeys.has(key)) {
-        seenEventKeys.add(key);
-        events.push({
-          id: `tla-${idx}-${timestamp}`,
-          source: "Trade_log_admin",
-          sourceLabel: "Trade_log_admin 管理員開單",
-          date: r[0],
-          formattedDate: displayDate,
-          timestamp,
-          change: -totalUnits,
-          stockLevel: 0,
-          customer,
-          district: (r[8] || "").trim(),
-          user,
-          orderId,
-          unit: (r[4] || "件").trim(),
-          quantity: qty,
-          refMultiplier: ref,
-          totalUnits,
-          price: parseFloat(r[6]) || 0,
-          subtotal: parseFloat(r[9]) || 0,
-          remarks: `管理員開單出庫: ${qty} ${r[4] || "件"} (換算 ${totalUnits} 件)`
-        });
-      }
-    }
-  });
-
-  // Sort events chronologically (ascending timestamp)
-  events.sort((a, b) => a.timestamp - b.timestamp);
-
-  // Fetch current product to anchor stock level
-  let currentProduct: any = null;
-  const localProducts = getLocalProducts();
-  currentProduct = localProducts.find((p: any) => isMatch(p.id, p.name));
-  if (!currentProduct && productsCache.length > 0) {
-    currentProduct = productsCache.find((p: any) => isMatch(p.id, p.name));
-  }
-
-  let currentStockNum = 0;
-  let isAlwaysStock = false;
-  let currentStockDisplay: string | number = 0;
-
-  if (currentProduct) {
-    isAlwaysStock = !!currentProduct.alwaysStock;
-    if (isAlwaysStock) {
-      currentStockDisplay = "長期充足";
-      currentStockNum = 0;
-    } else {
-      currentStockNum = parseFloat(currentProduct.secondaryStockCount) || 0;
-      currentStockDisplay = currentStockNum;
-    }
-  }
-
-  // Calculate cumulative stock trajectory backwards from currentStockNum
-  if (!isAlwaysStock && events.length > 0) {
-    let runningStock = currentStockNum;
-    for (let i = events.length - 1; i >= 0; i--) {
-      const ev = events[i];
-      if (ev.quantityTo !== undefined && !isNaN(Number(ev.quantityTo))) {
-        ev.stockLevel = Number(ev.quantityTo);
-        runningStock = Number(ev.quantityTo) - (ev.change || 0);
-      } else {
-        ev.stockLevel = runningStock;
-        runningStock = runningStock - (ev.change || 0);
-      }
-    }
-  } else if (isAlwaysStock) {
-    events.forEach(ev => {
-      ev.stockLevel = "長期充足";
-    });
-  }
-
-  // Calculate summary metrics
-  let totalInbound = 0;
-  let totalOutbound = 0;
-  let purchaseCount = 0;
-  let tradeLogCount = 0;
-  let tradeLogAdminCount = 0;
-
-  events.forEach(ev => {
-    if (ev.source === "Purchase") {
-      purchaseCount++;
-      if (ev.change > 0) totalInbound += ev.change;
-      else totalOutbound += Math.abs(ev.change);
-    } else if (ev.source === "Trade_Log") {
-      tradeLogCount++;
-      totalOutbound += Math.abs(ev.change);
-    } else if (ev.source === "Trade_log_admin") {
-      tradeLogAdminCount++;
-      totalOutbound += Math.abs(ev.change);
-    }
-  });
-
-  return {
-    product: {
-      id: queryId || (currentProduct ? currentProduct.id : ""),
-      name: queryName || (currentProduct ? currentProduct.name : ""),
-      currentStock: currentStockDisplay,
-      alwaysStock: isAlwaysStock,
-      hasStock: currentProduct ? !!currentProduct.hasStock : true
-    },
-    summary: {
-      totalEvents: events.length,
-      purchaseCount,
-      tradeLogCount,
-      tradeLogAdminCount,
-      totalInbound,
-      totalOutbound,
-      netChange: totalInbound - totalOutbound
-    },
-    events
-  };
-}
-
-app.get("/api/stock-history", async (req, res) => {
-  try {
-    const productId = (req.query.productId as string) || "";
-    const productName = (req.query.productName as string) || "";
-    const forceRefresh = req.query.refresh === "true";
-
-    if (!productId && !productName) {
-      return res.status(400).json({ error: "productId or productName query parameter is required" });
-    }
-
-    const historyData = await getStockHistoryForProduct(productId, productName, forceRefresh);
-    res.json(historyData);
-  } catch (error: any) {
-    console.error("Stock history API error:", error);
-    res.status(500).json({ error: error.message || "Failed to fetch stock history" });
-  }
-});
-
-app.get("/api/products/:id/stock-history", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const productName = (req.query.name as string) || "";
-    const forceRefresh = req.query.refresh === "true";
-
-    const historyData = await getStockHistoryForProduct(id, productName, forceRefresh);
-    res.json(historyData);
-  } catch (error: any) {
-    console.error("Stock history by ID API error:", error);
-    res.status(500).json({ error: error.message || "Failed to fetch stock history" });
-  }
-});
-
-app.get("/api/sold-data", async (req, res) => {
-  try {
-    const forceRefresh = req.query.refresh === "true";
-    if (forceRefresh) {
-      lastSoldFetchTime = 0;
-    }
-    const soldMap = await fetchSoldDataFromSheet();
-    res.json({ soldMap });
-  } catch (error: any) {
-    console.error("Sold data error:", error);
-    res.status(500).json({ error: error.message || "Failed to fetch sold data" });
-  }
-});
-
-app.get("/api/products", async (req, res) => {
-  try {
-    try {
-      checkAndApplyPromotions();
-    } catch (e) {
-      console.warn("Failed checking promotions on /api/products:", e);
-    }
-    const forceRefresh = req.query.refresh === "true";
-    if (forceRefresh) {
-      lastFetchTime = 0; // invalidate memory sheet cache duration lookup
-      lastCostFetchTime = 0; // invalidate memory cost cache duration lookup
-      lastPromoFetchTime = 0; // invalidate memory promo cache duration lookup
-    }
-    const sheetProducts = await fetchProductsFromSheet();
-    const localProducts = getLocalProducts();
-    
-    let costCategories: Awaited<ReturnType<typeof fetchCostCategories>> = {
-      symbolToName: {},
-      productIdToSymbol: {},
-      productIdToCostName: {},
-      categoryOrder: [],
-      highlightCategories: [],
-      brands: [],
-      sectionsOrder: []
-    };
-    try {
-      costCategories = await fetchCostCategories();
-    } catch (e) {
-      console.error("Failed to fetch cost categories:", e);
-    }
-
-    let promoCategories: string[] = [];
-    try {
-      promoCategories = await fetchPromoCategories();
-    } catch (e) {
-      console.error("Failed to fetch promo categories:", e);
-    }
-    
-    // Prevent duplicate entries: override any fetched sheet product with its local edited counterpart
-    const localIds = new Set(localProducts.map(p => p.id));
-    const filteredSheet = sheetProducts.filter(p => !localIds.has(p.id));
-    const allRawProducts = [...localProducts, ...filteredSheet];
-
-    // Active limit offers from Google Sheet 'limit_offer' tab
-    let limitOffers: LimitOfferEntry[] = [];
-    try {
-      limitOffers = await fetchLimitOffersFromSheet();
-    } catch (e) {
-      limitOffers = getLocalLimitOffers();
-    }
-    const now = new Date();
-    const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(now);
-    const activeOffers = limitOffers.filter(off => off.date_from <= todayStr && todayStr <= off.date_to);
-
-    // Decorate products with cost tab category symbol, name, and costName, and apply limit_offer prices
-    const decoratedProducts = allRawProducts.map((p: any) => {
-      let symbol = (costCategories.productIdToSymbol || {})[p.id] || "";
-      let name = (costCategories.symbolToName || {})[symbol] || "";
-      const costName = (costCategories.productIdToCostName || {})[p.id] || p.name;
-
-      if (!symbol) {
-        const rawCat = (p.extraAttributes && (p.extraAttributes["Categories"] || p.extraAttributes["Categories/分類"])) || (p.allValues ? p.allValues[12] : "") || "";
-        if (rawCat) {
-          symbol = getSymbolForCategoryName(rawCat, costCategories.symbolToName);
-          name = costCategories.symbolToName[symbol] || "";
-        }
-      }
-
-      // Check if product has active offer in limit_offer tab
-      const matchedOffer = activeOffers.find(off => 
-        off.title.trim().toLowerCase() === (p.name || "").trim().toLowerCase() ||
-        (p.id && off.title.trim() === p.id.trim())
-      );
-
-      let effectivePrice = p.price;
-      let originalPrice = p.price;
-      let hasLimitOffer = false;
-
-      if (matchedOffer && matchedOffer.price_to) {
-        effectivePrice = matchedOffer.price_to;
-        originalPrice = matchedOffer.price_from || p.price;
-        hasLimitOffer = true;
-      }
-
-      const updatedVals = p.allValues ? [...p.allValues] : [];
-      if (updatedVals.length > 14 && hasLimitOffer) {
-        updatedVals[14] = effectivePrice;
-      }
-
-      return {
-        ...p,
-        price: effectivePrice,
-        originalPrice: originalPrice,
-        hasLimitOffer: hasLimitOffer,
-        limitOfferDetails: matchedOffer || null,
-        extraAttributes: p.extraAttributes || {},
-        allValues: updatedVals,
-        costCategorySymbol: symbol,
-        costCategoryName: name,
-        costName: costName
-      };
-    });
-    
-    // Return all products so all products are available for viewing, searching, and editing ('編輯')
-    res.json({ products: decoratedProducts, costCategories, promoCategories });
-  } catch (error) {
-    console.error("Get products error:", error);
-    res.json({ products: getLocalProducts(), costCategories: { symbolToName: {}, productIdToSymbol: {}, productIdToCostName: {}, categoryOrder: [], highlightCategories: [] }, promoCategories: [] });
-  }
-});
-
-app.get("/api/uploaded-images", async (req, res) => {
-  try {
-    if (isGcsAvailable()) {
-      try {
-        console.log(`[GCS Sync Client] Listing objects in GCS bucket: ${bucketName}`);
-        const command = new ListObjectsV2Command({
-          Bucket: bucketName,
-        });
-        const response = await s3Client.send(command);
-        const contents = response.Contents || [];
-        
-        const images = contents
-          .filter((obj: any) => obj.Key && /\.(jpg|jpeg|png|gif|webp)$/i.test(obj.Key))
-          .map((obj: any) => ({
-            filename: obj.Key,
-            size: obj.Size || 0,
-            updatedAt: obj.LastModified || new Date(),
-          }));
-        
-        console.log(`[GCS Sync Client] GCS listed ${images.length} files successfully.`);
-        return res.json({ images });
-      } catch (gcsError: any) {
-        handleGcsError(gcsError, "list-images");
-      }
-    }
-
-    const publicDir = path.join(process.cwd(), "public");
-    if (!fs.existsSync(publicDir)) {
-      return res.json({ images: [] });
-    }
-    const files = fs.readdirSync(publicDir);
-    const images = files
-      .filter(file => /\.(jpg|jpeg|png|gif|webp)$/i.test(file))
-      .map(file => {
-        const filePath = path.join(publicDir, file);
-        const stats = fs.statSync(filePath);
-        return {
-          filename: file,
-          size: stats.size,
-          updatedAt: stats.mtime
-        };
-      });
-    res.json({ images });
-  } catch (error: any) {
-    console.error("List images error:", error);
-    res.status(500).json({ error: error.message || "Failed to list images." });
-  }
-});
-
-app.delete("/api/uploaded-images/:filename", async (req, res) => {
-  try {
-    const { filename } = req.params;
-    if (!filename) {
-      return res.status(400).json({ error: "Filename is required" });
-    }
-    const safeFilename = path.basename(filename);
-    if (!/\.(jpg|jpeg|png|gif|webp)$/i.test(safeFilename)) {
-      return res.status(400).json({ error: "Invalid file type" });
-    }
-
-    const publicDir = path.join(process.cwd(), "public");
-    const filePath = path.join(publicDir, safeFilename);
-
-    let deletedFromGcs = false;
-    if (isGcsAvailable()) {
-      try {
-        console.log(`[GCS Sync Client] Deleting from GCS bucket: ${safeFilename}`);
-        const command = new DeleteObjectCommand({
-          Bucket: bucketName,
-          Key: safeFilename,
-        });
-        await s3Client.send(command);
-        deletedFromGcs = true;
-        console.log(`[GCS Sync Client] Successfully deleted from GCS: ${safeFilename}`);
-      } catch (gcsError: any) {
-        handleGcsError(gcsError, "delete-image");
-      }
-    }
-
-    // Always attempt clean up from local directory too for consistency
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      console.log(`Deleted customer product image locally: ${safeFilename}`);
-      return res.json({ success: true, fromGcs: deletedFromGcs });
-    } else if (deletedFromGcs) {
-      return res.json({ success: true, fromGcs: true });
-    } else {
-      return res.status(404).json({ error: "File not found" });
-    }
-  } catch (error: any) {
-    console.error("Delete image error:", error);
-    res.status(500).json({ error: error.message || "Failed to delete image." });
-  }
-});
-
-// Smart router to resolve and match product photo files including copy suffixes (like id-XXXX-1.jpg)
-app.get(["/:filename", "/products/:filename", "/images/:filename"], async (req, res, next) => {
-  const { filename } = req.params;
-  
-  if (!filename || !/\.(jpg|jpeg|png|gif|webp)$/i.test(filename)) {
-    return next();
-  }
-
-  // 1. Try Google Cloud Storage first if enabled
-  if (isGcsAvailable()) {
-    try {
-      const command = new GetObjectCommand({
-        Bucket: bucketName,
-        Key: filename,
-      });
-      const s3Response = await s3Client.send(command);
-      if (s3Response.Body) {
-        res.setHeader("Content-Type", s3Response.ContentType || getMimeType(filename));
-        if (s3Response.ContentLength) {
-          res.setHeader("Content-Length", s3Response.ContentLength);
-        }
-        res.setHeader("Cache-Control", "public, max-age=31536000"); // Cache aggressively
-        const stream = s3Response.Body as any;
-        if (typeof stream.pipe === "function") {
-          return stream.pipe(res);
-        }
-      }
-    } catch (gcsError: any) {
-      if (gcsError.name !== "NoSuchKey" && gcsError.name !== "NotFound") {
-        handleGcsError(gcsError, "fetch-image");
-      }
-    }
-  }
-
-  const publicDir = path.join(process.cwd(), "public");
-  
-  // Extract clean ID base product name from filename
-  const dotIndex = filename.lastIndexOf(".");
-  const requestedBaseName = (dotIndex !== -1 ? filename.substring(0, dotIndex) : filename).toLowerCase();
-
-  // 2. Direct try: check if exact file exists in public/ and is non-empty
-  const exactPath = path.join(publicDir, filename);
-  if (fs.existsSync(exactPath)) {
-    const stats = fs.statSync(exactPath);
-    if (stats.size > 0) {
-      // Background sync accurate local file to GCS
-      if (isGcsAvailable()) {
-        fs.readFile(exactPath, (err, data) => {
-          if (!err && data && s3Client) {
-            const uploadCmd = new PutObjectCommand({
-              Bucket: bucketName,
-              Key: filename,
-              Body: data,
-              ContentType: getMimeType(filename),
-            });
-            s3Client.send(uploadCmd).then(() => {
-              console.log(`[GCS Sync Client] Progressively synced local historical file to GCS: ${filename}`);
-            }).catch(e => {
-              handleGcsError(e, "background-sync-1");
-            });
-          }
-        });
-      }
-      return res.sendFile(exactPath);
-    }
-  }
-
-  // 3. Loose try: search files in public list starting with requestedBaseName (e.g. "id-123" matches "id-123-1.jpg")
-  try {
-    if (fs.existsSync(publicDir)) {
-      const files = fs.readdirSync(publicDir);
-      const bestMatch = files.find(file => {
-        if (!/\.(jpg|jpeg|png|gif|webp)$/i.test(file)) return false;
-        
-        const fileDotIndex = file.lastIndexOf(".");
-        const fileBaseName = (fileDotIndex !== -1 ? file.substring(0, fileDotIndex) : file).toLowerCase();
-
-        // Matches if it's identical or starts with requested base name plus connector symbol
-        if (fileBaseName === requestedBaseName || fileBaseName.startsWith(requestedBaseName + "-") || fileBaseName.startsWith(requestedBaseName + "_")) {
-          const filePath = path.join(publicDir, file);
-          const stats = fs.statSync(filePath);
-          return stats.size > 0;
-        }
-        return false;
-      });
-
-      if (bestMatch) {
-        // If bestMatch exists and s3Client is initialized, we can asynchronously upload it to GCS for future instant serving!
-        if (isGcsAvailable()) {
-          const localMatchPath = path.join(publicDir, bestMatch);
-          fs.readFile(localMatchPath, (err, data) => {
-            if (!err && data && s3Client) {
-              const uploadCmd = new PutObjectCommand({
-                Bucket: bucketName,
-                Key: bestMatch,
-                Body: data,
-                ContentType: getMimeType(bestMatch),
-              });
-              s3Client.send(uploadCmd).then(() => {
-                console.log(`[GCS Sync Client] Progressively synced local historical file to GCS: ${bestMatch}`);
-              }).catch(e => {
-                handleGcsError(e, "background-sync-2");
-              });
-            }
-          });
-        }
-
-        console.log(`Smart matched request "${filename}" -> "${bestMatch}"`);
-        return res.sendFile(path.join(publicDir, bestMatch));
-      }
-    }
-  } catch (err) {
-    console.error("Dynamic image resolution error:", err);
-  }
-
-  // 4. On-demand fetch from Sheet15 if mapped
-  try {
-    const map = await getSheet15ImageMap();
-    const cleanLookup = requestedBaseName.replace(/^id-/, "");
-    const imgUrl = map.get(requestedBaseName) || map.get(`id-${cleanLookup}`) || map.get(cleanLookup);
-    if (imgUrl) {
-      console.log(`[On-Demand Sheet15 Fetch] Downloading ${filename} from ${imgUrl}...`);
-      const fetchRes = await fetch(imgUrl);
-      if (fetchRes.ok) {
-        const buf = Buffer.from(await fetchRes.arrayBuffer());
-        if (buf.length > 0) {
-          const targetFilename = requestedBaseName.startsWith("id-") ? `${requestedBaseName}.jpg` : `id-${requestedBaseName}.jpg`;
-          const savePath = path.join(publicDir, targetFilename);
-          fs.writeFileSync(savePath, buf);
-          res.setHeader("Content-Type", "image/jpeg");
-          res.setHeader("Cache-Control", "public, max-age=31536000");
-          return res.send(buf);
-        }
-      }
-    }
-  } catch (sheetFetchErr: any) {
-    console.error("On-demand Sheet15 image fetch error:", sheetFetchErr.message);
-  }
-
-  return res.status(404).send("Image not found");
-});
-
-// Serve static assets from public/assets if needed
-app.use(express.static(path.join(process.cwd(), "public")));
+import { createServer as createViteServer } from "vite";
 
 async function startServer() {
-  // Sync missing images from Sheet15 in background on boot
-  syncSheet15Images().catch(e => console.error("Initial Sheet15 sync error:", e));
+  const app = express();
+  const PORT = 3000;
 
+  app.use(express.json({ limit: "10mb" }));
+
+  // Ensure data directory exists for shared persistent orders across devices
+  const DATA_DIR = path.join(process.cwd(), "data");
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  const ORDERS_FILE = path.join(DATA_DIR, "saved_orders.json");
+  const DELETED_ORDERS_FILE = path.join(DATA_DIR, "deleted_order_ids.json");
+
+  const getDeletedOrderIds = (): string[] => {
+    try {
+      if (fs.existsSync(DELETED_ORDERS_FILE)) {
+        const raw = fs.readFileSync(DELETED_ORDERS_FILE, "utf-8");
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) return list;
+      }
+    } catch (err) {
+      console.error("Error reading deleted orders file:", err);
+    }
+    return [];
+  };
+
+  const addDeletedOrderId = (orderId: string) => {
+    if (!orderId) return;
+    try {
+      const list = getDeletedOrderIds();
+      if (!list.includes(orderId)) {
+        list.push(orderId);
+        const trimmed = list.slice(-2000);
+        fs.writeFileSync(DELETED_ORDERS_FILE, JSON.stringify(trimmed, null, 2), "utf-8");
+      }
+    } catch (err) {
+      console.error("Error saving deleted order ID:", err);
+    }
+  };
+
+  const removeDeletedOrderId = (orderId: string) => {
+    if (!orderId) return;
+    try {
+      let list = getDeletedOrderIds();
+      if (list.includes(orderId)) {
+        list = list.filter(id => id !== orderId);
+        fs.writeFileSync(DELETED_ORDERS_FILE, JSON.stringify(list, null, 2), "utf-8");
+      }
+    } catch (err) {
+      console.error("Error removing deleted order ID:", err);
+    }
+  };
+
+  const isRealOrder = (o: any) => {
+    if (!o || !o.id) return false;
+    if (typeof o.id === "string") {
+      if (o.id.startsWith("W_")) return false;
+      if (/^\d{8}_\d+$/.test(o.id)) return false;
+      if (/^\d{4}-\d{2}-\d{2}_/.test(o.id)) return false;
+    }
+    return true;
+  };
+
+  const parseCSV = (text: string): string[][] => {
+    const result: string[][] = [];
+    let row: string[] = [];
+    let currentField = "";
+    let inQuotes = false;
+    const cleanText = text.replace(/^\uFEFF/, "");
+    for (let i = 0; i < cleanText.length; i++) {
+      const char = cleanText[i];
+      const nextChar = cleanText[i + 1];
+      if (inQuotes) {
+        if (char === "\"") {
+          if (nextChar === "\"") {
+            currentField += "\"";
+            i++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          currentField += char;
+        }
+      } else {
+        if (char === "\"") {
+          inQuotes = true;
+        } else if (char === ",") {
+          row.push(currentField.trim());
+          currentField = "";
+        } else if (char === "\n" || char === "\r") {
+          row.push(currentField.trim());
+          if (row.length > 0) result.push(row);
+          row = [];
+          currentField = "";
+          if (char === "\r" && nextChar === "\n") i++;
+        } else {
+          currentField += char;
+        }
+      }
+    }
+    if (currentField !== "" || row.length > 0) {
+      row.push(currentField.trim());
+      if (row.some(cell => cell.length > 0)) result.push(row);
+    }
+    return result;
+  };
+
+  const parseNum = (val: any): number => {
+    if (!val) return 0;
+    const cleaned = val.toString().replace(/[$,\s]/g, "");
+    const p = parseFloat(cleaned);
+    return isNaN(p) ? 0 : p;
+  };
+
+  const parseTradeSheetOrders = (csvText: string, defaultSales: string): any[] => {
+    const rows = parseCSV(csvText);
+    if (rows.length < 2) return [];
+    const headerRow = rows[0].map(h => (h || "").toLowerCase().trim());
+    let idCol = 12;
+    let customerCol = 7;
+    let userCol = 10;
+    let dateCol = 0;
+    let remarkCol = 13;
+    let subtotalCol = 9;
+    let qtyCol = 3;
+    let unitCol = 4;
+    let refCol = 5;
+    let priceCol = 6;
+    let itemCol = 1;
+
+    headerRow.forEach((h, i) => {
+      if (i > 2 && (h === "id" || h.includes("order"))) idCol = i;
+      if (h.includes("customer") || h.includes("客戶")) customerCol = i;
+      if (h === "user" || h.includes("sales") || h.includes("用戶")) userCol = i;
+      if (h.includes("date") || h.includes("日期")) dateCol = i;
+      if (h.includes("remark") || h.includes("備註")) remarkCol = i;
+      if (h.includes("subtotal") || h.includes("小計")) subtotalCol = i;
+      if (h.includes("quantity") || h === "qty" || h.includes("數量")) qtyCol = i;
+      if (h === "unit" || h.includes("單位")) unitCol = i;
+      if (h === "ref") refCol = i;
+      if (h === "price" || h.includes("單價")) priceCol = i;
+      if (h === "item" || h.includes("貨品")) itemCol = i;
+    });
+
+    const orderMap = new Map<string, any>();
+    for (let rIdx = 1; rIdx < rows.length; rIdx++) {
+      const row = rows[rIdx];
+      if (!row || row.length === 0) continue;
+      const orderId = (row[idCol] || row[12] || "").trim();
+      const customer = (row[customerCol] || row[7] || "").trim();
+      if (!orderId && !customer) continue;
+
+      const finalId = orderId || `TRADE-${rIdx}`;
+      const sales = (row[userCol] || row[10] || defaultSales || "").trim();
+      const date = (row[dateCol] || row[0] || "").trim();
+      const remark = (row[remarkCol] || row[13] || "").trim();
+      const rawQty = parseNum(row[qtyCol] || row[3]);
+      const unit = (row[unitCol] || row[4] || "unit").trim();
+      const ref = parseNum(row[refCol] || row[5]) || 1;
+      const price = parseNum(row[priceCol] || row[6]);
+      const subtotal = parseNum(row[subtotalCol] || row[9]) || (rawQty * price);
+      const isOuterBox = unit.toLowerCase() === "box" || unit.includes("箱") || unit.includes("盒") || unit.includes("條");
+      const totalUnits = isOuterBox && ref > 1 ? (rawQty * ref) : (rawQty || (price > 0 ? Math.round(subtotal / price) : 1));
+      const itemName = (row[itemCol] || row[1] || "Item").trim();
+
+      const orderItem = {
+        id: `${finalId}-item-${rIdx}`,
+        name: itemName,
+        quantity: totalUnits,
+        price,
+        isOuterBox,
+        unitsPerBox: ref,
+        outerBoxUnit: unit
+      };
+
+      if (!orderMap.has(finalId)) {
+        orderMap.set(finalId, {
+          id: finalId,
+          customerName: customer,
+          salesName: sales,
+          date,
+          remark: remark === "." ? "" : remark,
+          items: [orderItem],
+          orderAmount: subtotal,
+          isKeyedIn: true,
+          isHeld: false,
+          stockDeducted: true,
+          deductedItems: [{ name: orderItem.name, quantity: orderItem.quantity }]
+        });
+      } else {
+        const existing = orderMap.get(finalId);
+        existing.items.push(orderItem);
+        if (!existing.deductedItems) existing.deductedItems = [];
+        existing.deductedItems.push({ name: orderItem.name, quantity: orderItem.quantity });
+        existing.orderAmount += subtotal;
+        if (!existing.remark && remark && remark !== ".") {
+          existing.remark = remark;
+        }
+      }
+    }
+    return Array.from(orderMap.values());
+  };
+
+  const PRODUCT_LIST_SHEET_ID = "16yXbnBdkKuKCVGvhrUJ7YPFNVGBcyap3b5sbvqv0Dsg";
+  const GVIZ_TRADE_URL = `https://docs.google.com/spreadsheets/d/${PRODUCT_LIST_SHEET_ID}/gviz/tq?tqx=out:csv&gid=1412322886`;
+  const GVIZ_ADMIN_URL = `https://docs.google.com/spreadsheets/d/${PRODUCT_LIST_SHEET_ID}/gviz/tq?tqx=out:csv&gid=2071438386`;
+  const PUB_TRADE_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?gid=1412322886&single=true&output=csv";
+  const PUB_ADMIN_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?gid=2071438386&single=true&output=csv";
+
+  let cachedTradeOrders: any[] = [];
+  let lastTradeFetchTime = 0;
+
+  const fetchTradeLogOrdersFromServer = async (): Promise<any[]> => {
+    const now = Date.now();
+    const deletedSet = new Set(getDeletedOrderIds());
+    if (cachedTradeOrders.length > 0 && (now - lastTradeFetchTime) < 2000) {
+      return cachedTradeOrders.filter((o: any) => o && o.id && !deletedSet.has(o.id));
+    }
+
+    const fetchSheetCSV = async (gvizUrl: string, pubUrl: string): Promise<string> => {
+      try {
+        const gvizWithTime = gvizUrl.includes("?") ? `${gvizUrl}&t=${Date.now()}` : `${gvizUrl}?t=${Date.now()}`;
+        const res = await fetch(gvizWithTime, { signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+          const text = await res.text();
+          if (text.length > 50) return text;
+        }
+      } catch {}
+      try {
+        const res2 = await fetch(`${pubUrl}&t=${Date.now()}`, { signal: AbortSignal.timeout(5000) });
+        if (res2.ok) return await res2.text();
+      } catch {}
+      return "";
+    };
+
+    try {
+      const [tradeCsv, adminCsv] = await Promise.all([
+        fetchSheetCSV(GVIZ_TRADE_URL, PUB_TRADE_URL),
+        fetchSheetCSV(GVIZ_ADMIN_URL, PUB_ADMIN_URL)
+      ]);
+
+      const tradeOrders = tradeCsv ? parseTradeSheetOrders(tradeCsv, "Sales") : [];
+      const adminOrders = adminCsv ? parseTradeSheetOrders(adminCsv, "Admin") : [];
+      const all = [...tradeOrders, ...adminOrders];
+      const valid = all.filter((o: any) => o && o.id && !deletedSet.has(o.id));
+      if (valid.length > 0) {
+        cachedTradeOrders = valid;
+        lastTradeFetchTime = now;
+        return valid;
+      }
+    } catch (err) {
+      console.warn("Failed to fetch trade log orders from Google Sheets:", err);
+    }
+    return cachedTradeOrders.filter((o: any) => o && o.id && !deletedSet.has(o.id));
+  };
+
+  const getSavedOrders = (): any[] => {
+    try {
+      if (fs.existsSync(ORDERS_FILE)) {
+        const raw = fs.readFileSync(ORDERS_FILE, "utf-8");
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          const deletedSet = new Set(getDeletedOrderIds());
+          return list.filter((o: any) => isRealOrder(o) && !deletedSet.has(o.id));
+        }
+      }
+    } catch (err) {
+      console.error("Error reading saved orders file:", err);
+    }
+    return [];
+  };
+
+  const saveOrdersToFile = (orders: any[]) => {
+    try {
+      fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2), "utf-8");
+    } catch (err) {
+      console.error("Error writing saved orders file:", err);
+    }
+  };
+
+  // In-memory image buffer cache for ultra-fast serving
+  const imageCache = new Map<string, { buffer: Buffer; contentType: string }>();
+  const MAX_IMAGE_CACHE = 500;
+
+  function detectImageContentType(buffer: Buffer, headerType?: string | null): string {
+    if (buffer.length >= 12) {
+      if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+          buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
+        return "image/webp";
+      }
+      if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+        return "image/jpeg";
+      }
+      if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+        return "image/png";
+      }
+      if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
+        return "image/gif";
+      }
+    }
+    if (headerType && headerType.startsWith("image/")) {
+      return headerType;
+    }
+    return "image/jpeg";
+  }
+
+  function formatProductId(id: string | number | undefined | null): string {
+    if (id === undefined || id === null) return "";
+    const str = String(id).trim();
+    if (!str) return "";
+    const numOnly = str.replace(/^id-/, "").trim();
+    return numOnly ? `id-${numOnly}` : str;
+  }
+
+  // Cache sheet product image mapping (Sheet15: Col A Product ID -> Col D Image URLs)
+  let sheetProductImageMap: Map<string, string> | null = null;
+  let lastSheetProductImageFetch = 0;
+
+  async function getProductImageUrlFromSheet(productId: string): Promise<string | null> {
+    const formattedId = formatProductId(productId);
+    const numId = productId.replace(/^id-/, "").trim();
+    const now = Date.now();
+    if (!sheetProductImageMap || now - lastSheetProductImageFetch > 10 * 60 * 1000) {
+      try {
+        const SHEET15_PUB_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?gid=1813720414&single=true&output=csv";
+        const SHEET15_GVIZ_URL = `https://docs.google.com/spreadsheets/d/${PRODUCT_LIST_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet15`;
+
+        let csvText = "";
+        try {
+          const res = await fetch(SHEET15_PUB_URL, { signal: AbortSignal.timeout(5000) });
+          if (res.ok) csvText = await res.text();
+        } catch {
+          // Fallback to GVIZ
+        }
+
+        if (!csvText) {
+          try {
+            const res = await fetch(SHEET15_GVIZ_URL, { signal: AbortSignal.timeout(5000) });
+            if (res.ok) csvText = await res.text();
+          } catch (err) {
+            console.warn("Failed to fetch Sheet15 via GVIZ:", err);
+          }
+        }
+
+        if (csvText) {
+          const rows = parseCSV(csvText);
+          const map = new Map<string, string>();
+          let pIdIdx = 0; // Col A
+          let imgIdx = 3; // Col D
+          if (rows.length > 0) {
+            const headers = rows[0].map(h => h.trim().toLowerCase());
+            const foundId = headers.findIndex(h => h.replace(/[\s_-]/g, "") === "productid" || h === "id");
+            if (foundId !== -1) pIdIdx = foundId;
+            const foundImg = headers.findIndex(h => h === "image urls" || h === "image url" || h === "image");
+            if (foundImg !== -1) imgIdx = foundImg;
+          }
+          for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            const rawId = (row[pIdIdx] || "").trim();
+            const rawImg = (row[imgIdx] || "").trim();
+            const match = rawImg.match(/https?:\/\/[^\s,"'>|]+/);
+            if (rawId && match) {
+              const fId = formatProductId(rawId);
+              const nId = rawId.replace(/^id-/, "").trim();
+              map.set(fId, match[0]);
+              map.set(nId, match[0]);
+              map.set(rawId, match[0]);
+            }
+          }
+          sheetProductImageMap = map;
+          lastSheetProductImageFetch = now;
+        }
+      } catch (e) {
+        console.warn("Failed to fetch Sheet15 for images:", e);
+      }
+    }
+    return (
+      sheetProductImageMap?.get(formattedId) ||
+      sheetProductImageMap?.get(numId) ||
+      sheetProductImageMap?.get(productId) ||
+      null
+    );
+  }
+
+  // Authority products list helper (builds canonical list strictly by product ID)
+  async function getAuthorityProductsList(): Promise<{ id: string; name: string; extraAttributes: { "Image URLs": string } }[]> {
+    await getProductImageUrlFromSheet("warmup");
+    const MASTER_PUB_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vStdyv4mUaIdO-jPeUwBfxMxBZbCkbNEtk8VNhyrpiAInlNb7w3jli2jYtERyVPp94aWMeVuP4N0XNv/pub?gid=687938954&single=true&output=csv";
+    const res = await fetch(MASTER_PUB_URL, { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) throw new Error("Failed to fetch master sheet: " + res.statusText);
+    const text = await res.text();
+    const rows = parseCSV(text);
+    if (rows.length < 2) return [];
+
+    let pIdIdx = 1; // Col B
+    let titleIdx = 2; // Col C
+    let imgIdx = 38; // Col AM
+    const headers = rows[0].map(h => h.trim().toLowerCase());
+    const foundPid = headers.findIndex(h => h.replace(/[\s_-]/g, "") === "productid" || h === "id");
+    if (foundPid !== -1) pIdIdx = foundPid;
+    const foundTitle = headers.findIndex(h => h === "title" || h === "item" || h === "product name");
+    if (foundTitle !== -1) titleIdx = foundTitle;
+    const foundImg = headers.findIndex(h => h === "image urls" || h === "image url" || h === "image");
+    if (foundImg !== -1) imgIdx = foundImg;
+
+    const list: { id: string; name: string; extraAttributes: { "Image URLs": string } }[] = [];
+    const seenIds = new Set<string>();
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      const rawId = (row[pIdIdx] || "").trim();
+      const name = (row[titleIdx] || "").trim();
+      if (!name || name.toLowerCase() === "title") continue;
+      const fId = formatProductId(rawId);
+      if (!fId || seenIds.has(fId)) continue;
+      seenIds.add(fId);
+
+      // Strict ID match for image
+      let img = sheetProductImageMap?.get(fId) || sheetProductImageMap?.get(rawId) || "";
+      if (!img && row[imgIdx]) {
+        const m = (row[imgIdx] || "").match(/https?:\/\/[^\s,"'>|]+/);
+        if (m) img = m[0];
+      }
+
+      list.push({
+        id: fId,
+        name,
+        extraAttributes: {
+          "Image URLs": img
+        }
+      });
+    }
+
+    return list;
+  }
+
+  // API Routes FIRST
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok" });
+  });
+
+  // Authority products list endpoint
+  app.get("/api/products", async (req, res) => {
+    // 1. Try remote authority endpoints first
+    const remoteBases = [
+      "https://ais-dev-e67qvrm3vxclidkmxocymu-259187692597.us-east1.run.app",
+      "https://ais-pre-e67qvrm3vxclidkmxocymu-259187692597.us-east1.run.app"
+    ];
+
+    for (const base of remoteBases) {
+      try {
+        const remoteResp = await fetch(`${base}/api/products`, {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (remoteResp.ok) {
+          const data = await remoteResp.json();
+          if (data && Array.isArray(data.products) && data.products.length > 0) {
+            res.json(data);
+            return;
+          }
+        }
+      } catch {}
+    }
+
+    // 2. Build local authoritative products list with strict Unique ID matching
+    try {
+      const products = await getAuthorityProductsList();
+      res.json({ products });
+    } catch (err) {
+      console.error("Failed to build products list:", err);
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Exact Product Image Endpoint - matches formatted product ID strictly: /api/products/:id/image
+  app.get("/api/products/:id/image", async (req, res) => {
+    const rawId = (req.params.id || "").trim();
+    const formattedId = formatProductId(rawId);
+    if (!formattedId || formattedId === "id-") {
+      res.status(400).json({ error: "Missing or invalid product id" });
+      return;
+    }
+
+    // 1. Check in-memory image cache
+    if (imageCache.has(formattedId)) {
+      const cached = imageCache.get(formattedId)!;
+      res.setHeader("Content-Type", cached.contentType);
+      res.setHeader("Cache-Control", "public, max-age=604800, stale-while-revalidate=86400");
+      res.send(cached.buffer);
+      return;
+    }
+
+    // 2. Check local images directory in data/images
+    const localImgDir = path.join(process.cwd(), "data", "images");
+    const extensions = ["", ".jpg", ".png", ".jpeg", ".webp"];
+    for (const ext of extensions) {
+      const candidate = path.join(localImgDir, `${formattedId}${ext}`);
+      if (fs.existsSync(candidate)) {
+        try {
+          const stat = fs.statSync(candidate);
+          if (stat.isFile()) {
+            res.setHeader("Cache-Control", "public, max-age=86400");
+            res.sendFile(candidate);
+            return;
+          }
+        } catch {}
+      }
+    }
+
+    // 3. Try remote authority endpoints
+    const remoteBases = [
+      "https://ais-dev-e67qvrm3vxclidkmxocymu-259187692597.us-east1.run.app",
+      "https://ais-pre-e67qvrm3vxclidkmxocymu-259187692597.us-east1.run.app"
+    ];
+
+    for (const base of remoteBases) {
+      try {
+        const remoteUrl = `${base}/api/products/${encodeURIComponent(formattedId)}/image`;
+        const remoteResp = await fetch(remoteUrl, {
+          signal: AbortSignal.timeout(3500),
+          headers: { Accept: "image/*,*/*;q=0.8" },
+          redirect: "follow",
+        });
+        if (remoteResp.ok) {
+          const cType = remoteResp.headers.get("content-type") || "";
+          if (cType.startsWith("image/")) {
+            const buffer = Buffer.from(await remoteResp.arrayBuffer());
+            const contentType = detectImageContentType(buffer, cType);
+            if (imageCache.size >= MAX_IMAGE_CACHE) {
+              const firstKey = imageCache.keys().next().value;
+              if (firstKey) imageCache.delete(firstKey);
+            }
+            imageCache.set(formattedId, { buffer, contentType });
+            res.setHeader("Content-Type", contentType);
+            res.setHeader("Cache-Control", "public, max-age=604800, stale-while-revalidate=86400");
+            res.send(buffer);
+            return;
+          }
+        }
+      } catch {}
+    }
+
+    // 4. Exact ID lookup from Google Sheet (Col A in Sheet15 strictly matches product ID)
+    try {
+      const sheetUrl = await getProductImageUrlFromSheet(formattedId);
+      if (sheetUrl) {
+        const resp = await fetch(sheetUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            Accept: "image/webp,image/apng,image/*,*/*;q=0.8",
+          },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (resp.ok) {
+          const buffer = Buffer.from(await resp.arrayBuffer());
+          const contentType = detectImageContentType(buffer, resp.headers.get("content-type"));
+          if (imageCache.size >= MAX_IMAGE_CACHE) {
+            const firstKey = imageCache.keys().next().value;
+            if (firstKey) imageCache.delete(firstKey);
+          }
+          imageCache.set(formattedId, { buffer, contentType });
+          res.setHeader("Content-Type", contentType);
+          res.setHeader("Cache-Control", "public, max-age=604800, stale-while-revalidate=86400");
+          res.send(buffer);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn(`Error resolving image for ${formattedId}:`, err);
+    }
+
+    // 5. Not found - 404
+    res.status(404).json({ error: `Image not found for product ID ${formattedId}` });
+  });
+
+  // Alias /api/product-image/:id to the same exact handler
+  app.get("/api/product-image/:id", (req, res) => {
+    const formattedId = formatProductId(req.params.id);
+    res.redirect(`/api/products/${encodeURIComponent(formattedId)}/image`);
+  });
+
+  // General proxy endpoint to safely fetch and serve images bypassing iframe CORS & mime issues
+  app.get("/api/proxy-image", async (req, res) => {
+    const rawUrl = typeof req.query.url === "string" ? req.query.url.trim() : "";
+    if (!rawUrl || !rawUrl.startsWith("http")) {
+      res.status(400).json({ error: "Invalid image URL" });
+      return;
+    }
+
+    if (imageCache.has(rawUrl)) {
+      const cached = imageCache.get(rawUrl)!;
+      res.setHeader("Content-Type", cached.contentType);
+      res.setHeader("Cache-Control", "public, max-age=604800, stale-while-revalidate=86400");
+      res.send(cached.buffer);
+      return;
+    }
+
+    try {
+      const resp = await fetch(rawUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+          "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+        },
+        signal: AbortSignal.timeout(5000),
+      });
+
+      if (!resp.ok) {
+        res.status(resp.status).json({ error: "Failed to fetch image" });
+        return;
+      }
+
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      const contentType = detectImageContentType(buffer, resp.headers.get("content-type"));
+
+      if (imageCache.size >= MAX_IMAGE_CACHE) {
+        const firstKey = imageCache.keys().next().value;
+        if (firstKey) imageCache.delete(firstKey);
+      }
+      imageCache.set(rawUrl, { buffer, contentType });
+
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "public, max-age=604800, stale-while-revalidate=86400");
+      res.send(buffer);
+    } catch (err) {
+      res.status(500).json({ error: "Image fetch error: " + String(err) });
+    }
+  });
+
+  // Strictly fetch Trade_log orders only (excluding Trade_log_admin and any local/saved drafts)
+  app.get("/api/trade-log-only", async (req, res) => {
+    try {
+      const gvizWithTime = `${GVIZ_TRADE_URL}&t=${Date.now()}`;
+      let csv = "";
+      try {
+        const r1 = await fetch(gvizWithTime, { signal: AbortSignal.timeout(5000) });
+        if (r1.ok) {
+          const txt = await r1.text();
+          if (txt.length > 50) csv = txt;
+        }
+      } catch {}
+
+      if (!csv) {
+        try {
+          const r2 = await fetch(`${PUB_TRADE_URL}&t=${Date.now()}`, { signal: AbortSignal.timeout(5000) });
+          if (r2.ok) csv = await r2.text();
+        } catch {}
+      }
+
+      if (csv) {
+        const orders = parseTradeSheetOrders(csv, "Sales");
+        res.json({ success: true, orders });
+        return;
+      }
+      res.json({ success: true, orders: [] });
+    } catch (err) {
+      res.status(500).json({ success: false, error: String(err), orders: [] });
+    }
+  });
+
+  // Get orders directly from Trade_log and Trade_log_admin tabs of Product_list
+  app.get("/api/trade-orders", async (req, res) => {
+    try {
+      const orders = await fetchTradeLogOrdersFromServer();
+      const deletedOrderIds = getDeletedOrderIds();
+      const deletedSet = new Set(deletedOrderIds);
+      const activeOrders = orders.filter((o: any) => o && o.id && !deletedSet.has(o.id));
+      res.json({ success: true, orders: activeOrders, deletedOrderIds });
+    } catch (err) {
+      console.error("Error fetching trade orders:", err);
+      res.status(500).json({ success: false, error: String(err), deletedOrderIds: getDeletedOrderIds() });
+    }
+  });
+
+  // Get all shared saved/pending orders across devices with deleted order IDs
+  app.get("/api/orders", async (req, res) => {
+    try {
+      const deletedOrderIds = getDeletedOrderIds();
+      const deletedSet = new Set(deletedOrderIds);
+      const orders = getSavedOrders().filter((o: any) => !deletedSet.has(o.id));
+      res.json({ success: true, orders, deletedOrderIds });
+    } catch (err) {
+      res.json({ success: true, orders: [], deletedOrderIds: getDeletedOrderIds() });
+    }
+  });
+
+  // Get deleted order IDs
+  app.get("/api/orders/deleted", (req, res) => {
+    res.json({ success: true, deletedOrderIds: getDeletedOrderIds() });
+  });
+
+  // Save or update an order
+  app.post("/api/orders", (req, res) => {
+    const order = req.body;
+    if (!order || !order.id) {
+      res.status(400).json({ error: "Order ID is required" });
+      return;
+    }
+    // If an order is explicitly saved afresh, ensure it is un-deleted
+    removeDeletedOrderId(order.id);
+
+    const orders = getSavedOrders();
+    const idx = orders.findIndex((o: any) => o.id === order.id);
+    if (idx !== -1) {
+      orders[idx] = { ...orders[idx], ...order };
+    } else {
+      orders.unshift(order);
+    }
+    saveOrdersToFile(orders);
+    res.json({ success: true, order });
+  });
+
+  // Batch sync orders (e.g. from local storage)
+  app.post("/api/orders/sync", (req, res) => {
+    const incoming: any[] = req.body.orders || [];
+    if (!Array.isArray(incoming)) {
+      res.status(400).json({ error: "orders array required" });
+      return;
+    }
+    const deletedOrderIds = getDeletedOrderIds();
+    const deletedSet = new Set(deletedOrderIds);
+    const currentOrders = getSavedOrders().filter((o: any) => !deletedSet.has(o.id));
+    const orderMap = new Map<string, any>();
+
+    // Existing server orders (strictly excluding deleted orders)
+    currentOrders.filter(isRealOrder).forEach((o: any) => {
+      if (o && o.id && !deletedSet.has(o.id)) orderMap.set(o.id, o);
+    });
+
+    // Merge incoming (strictly ignoring any deleted orders and historical Log invoices)
+    incoming.filter(isRealOrder).forEach((o: any) => {
+      if (o && o.id && !deletedSet.has(o.id)) {
+        if (!orderMap.has(o.id)) {
+          orderMap.set(o.id, o);
+        } else {
+          const existing = orderMap.get(o.id);
+          orderMap.set(o.id, { ...existing, ...o });
+        }
+      }
+    });
+
+    const merged = Array.from(orderMap.values());
+    saveOrdersToFile(merged);
+    res.json({ success: true, orders: merged, deletedOrderIds });
+  });
+
+  // Delete an order
+  app.delete("/api/orders/:id", (req, res) => {
+    const orderId = req.params.id;
+    addDeletedOrderId(orderId);
+
+    // Evict from in-memory trade orders cache immediately
+    cachedTradeOrders = cachedTradeOrders.filter((o: any) => o.id !== orderId);
+    lastTradeFetchTime = 0; // Force immediate fresh fetch from Google Sheets next time
+
+    let orders = getSavedOrders();
+    orders = orders.filter((o: any) => o.id !== orderId);
+    saveOrdersToFile(orders);
+    res.json({ success: true, deletedOrderIds: getDeletedOrderIds() });
+  });
+
+  // Toggle hold on an order
+  app.patch("/api/orders/:id/hold", (req, res) => {
+    const orderId = req.params.id;
+    const { isHeld, orderData } = req.body || {};
+    const orders = getSavedOrders();
+    const idx = orders.findIndex((o: any) => o.id === orderId);
+
+    let updatedOrder: any = null;
+
+    if (idx !== -1) {
+      const current = orders[idx];
+      const nextHeld = typeof isHeld === "boolean" ? isHeld : !current.isHeld;
+      current.isHeld = nextHeld;
+      if (nextHeld) {
+        current.isKeyedIn = false;
+        current.stockDeducted = false;
+        current.deductedItems = [];
+      }
+      current.updatedAt = Date.now();
+      if (orderData && typeof orderData === "object") {
+        orders[idx] = { 
+          ...current, 
+          ...orderData, 
+          id: orderId, 
+          isHeld: nextHeld, 
+          isKeyedIn: nextHeld ? false : (orderData.isKeyedIn !== undefined ? orderData.isKeyedIn : current.isKeyedIn), 
+          stockDeducted: orderData.stockDeducted !== undefined ? orderData.stockDeducted : (nextHeld ? false : current.stockDeducted),
+          deductedItems: orderData.deductedItems || (nextHeld ? [] : current.deductedItems),
+          updatedAt: Date.now() 
+        };
+      }
+      updatedOrder = orders[idx];
+    } else {
+      // Order not yet in saved_orders file (e.g. came directly from Trade_log)
+      const fromTrade = cachedTradeOrders.find((o: any) => o && o.id === orderId);
+      const base = orderData || fromTrade || { id: orderId };
+      const nextHeld = typeof isHeld === "boolean" ? isHeld : true;
+      updatedOrder = {
+        ...base,
+        id: orderId,
+        isHeld: nextHeld,
+        isKeyedIn: nextHeld ? false : Boolean(base.isKeyedIn),
+        stockDeducted: nextHeld ? false : (base.stockDeducted !== undefined ? base.stockDeducted : true),
+        deductedItems: nextHeld ? [] : (base.deductedItems || (base.items ? base.items.map((it: any) => ({ name: it.name, quantity: it.quantity })) : undefined)),
+        updatedAt: Date.now()
+      };
+      orders.unshift(updatedOrder);
+    }
+
+    // When an order is held, immediately remove from in-memory trade orders cache
+    if (updatedOrder && updatedOrder.isHeld) {
+      cachedTradeOrders = cachedTradeOrders.filter((o: any) => o && o.id !== orderId);
+      lastTradeFetchTime = 0;
+    }
+
+    saveOrdersToFile(orders);
+    res.json({ success: true, order: updatedOrder });
+  });
+
+  // Explicitly remove order from trade log cache
+  app.post("/api/orders/:id/remove-trade-log", (req, res) => {
+    const orderId = req.params.id;
+    cachedTradeOrders = cachedTradeOrders.filter((o: any) => o && o.id !== orderId);
+    lastTradeFetchTime = 0;
+    const orders = getSavedOrders();
+    const existing = orders.find((o: any) => o.id === orderId);
+    if (existing) {
+      existing.isKeyedIn = false;
+      existing.isHeld = true;
+      existing.updatedAt = Date.now();
+      saveOrdersToFile(orders);
+    }
+    res.json({ success: true, orderId });
+  });
+
+  // Mark order as keyed in or unkeyed
+  app.patch("/api/orders/:id/keyin", (req, res) => {
+    const orderId = req.params.id;
+    const isKeyedIn = req.body && req.body.isKeyedIn !== undefined ? Boolean(req.body.isKeyedIn) : true;
+    const orders = getSavedOrders();
+    const order = orders.find((o: any) => o.id === orderId);
+    if (order) {
+      order.isKeyedIn = isKeyedIn;
+      if (isKeyedIn) order.isHeld = false;
+      if (req.body.stockDeducted !== undefined) order.stockDeducted = req.body.stockDeducted;
+      if (req.body.deductedItems !== undefined) order.deductedItems = req.body.deductedItems;
+      order.updatedAt = Date.now();
+    } else {
+      orders.unshift({ 
+        id: orderId, 
+        isKeyedIn, 
+        isHeld: false, 
+        stockDeducted: req.body.stockDeducted !== undefined ? req.body.stockDeducted : isKeyedIn,
+        deductedItems: req.body.deductedItems,
+        updatedAt: Date.now() 
+      });
+    }
+    saveOrdersToFile(orders);
+    lastTradeFetchTime = 0; // Force immediate refresh of trade orders from Google Sheets
+    res.json({ success: true, isKeyedIn });
+  });
+
+  // Batch mark orders as keyed in
+  app.post("/api/orders/keyin-batch", (req, res) => {
+    const orderIds: string[] = req.body.orderIds || [];
+    const incomingOrders: any[] = req.body.orders || [];
+    if (!Array.isArray(orderIds) || orderIds.length === 0) {
+      res.json({ success: true, count: 0 });
+      return;
+    }
+    const incomingMap = new Map<string, any>();
+    incomingOrders.forEach(o => { if (o && o.id) incomingMap.set(o.id, o); });
+
+    const idSet = new Set(orderIds);
+    const orders = getSavedOrders();
+    orders.forEach((o: any) => {
+      if (idSet.has(o.id)) {
+        o.isKeyedIn = true;
+        o.isHeld = false;
+        o.stockDeducted = true;
+        const extra = incomingMap.get(o.id);
+        if (extra?.deductedItems) o.deductedItems = extra.deductedItems;
+        else if (!o.deductedItems && o.items) o.deductedItems = o.items.map((it: any) => ({ name: it.name, quantity: it.quantity }));
+        o.updatedAt = Date.now();
+        idSet.delete(o.id);
+      }
+    });
+    // Add any remaining order IDs that weren't in saved_orders.json
+    idSet.forEach(id => {
+      const extra = incomingMap.get(id);
+      orders.unshift({ 
+        id, 
+        isKeyedIn: true, 
+        isHeld: false, 
+        stockDeducted: true,
+        deductedItems: extra?.deductedItems,
+        updatedAt: Date.now() 
+      });
+    });
+    saveOrdersToFile(orders);
+    lastTradeFetchTime = 0; // Force immediate refresh of trade orders from Google Sheets
+    res.json({ success: true, count: orderIds.length });
+  });
+
+  // Vite middleware for development (HMR disabled to prevent reload on app minimize/switch)
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res, next) => {
-      // If the path contains an extension, it's a static file request (not an HTML route), so return 404
-      const ext = path.extname(req.path);
-      if (ext && ext !== ".html") {
-        return res.status(404).send("Not found");
-      }
+    // In Express v5, use '*all' for catch-all route
+    app.get("*all", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 }
 

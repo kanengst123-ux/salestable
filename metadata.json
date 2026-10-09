@@ -1,6 +1,6 @@
 {
-  "name": "Interactive Product Catalog",
-  "description": "An interactive product catalog and sales order management tool with PDF generation.",
+  "name": "榮昇銷售數據",
+  "description": "榮昇銷售數據分析儀表板，連接 Google Sheets 提供深度的數據可視化和業務洞察。",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

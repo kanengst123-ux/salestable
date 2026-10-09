@@ -1,0 +1,21 @@
+orderId,orderDate,customerName,segment,region,category,subCategory,productName,sales,quantity,profit,Paid
+INV-1001,2024-01-15,TechFlow Solutions,Corporate,North,Electronics,Laptops,"MacBook Pro 14""",2499,1,500,Paid
+INV-1002,2024-01-18,Sarah Jenkins,Consumer,South,Furniture,Chairs,ErgoDesk Chair,350,2,70,Paid
+INV-1003,2024-01-20,Urban Outfitters,Retail,West,Clothing,Apparel,Summer Collection Bulk,1200,10,240,Pending
+INV-1004,2024-01-22,BuildIt Inc,Corporate,East,Supplies,Tools,Heavy Duty Drill,180,5,36,Paid
+INV-1005,2024-02-05,Global Logistics,Corporate,North,Electronics,Monitors,4K Studio Display,1299,2,260,Paid
+INV-1006,2024-02-08,Mike Ross,Consumer,West,Furniture,Desks,Oak Writing Desk,850,1,170,Paid
+INV-1007,2024-02-12,Aura Design,Retail,South,Electronics,Peripherals,Wireless Keyboard,99,5,20,Pending
+INV-1008,2024-02-15,Zenith Corp,Corporate,North,Electronics,Laptops,Dell XPS 15,1899,3,380,Paid
+INV-1009,2024-03-01,City Library,Public,East,Furniture,Shelving,Metal Bookcase,450,4,90,Paid
+INV-1010,2024-03-05,Coffee House,Retail,West,Supplies,Consumables,Bulk Coffee Beans,250,20,50,Paid
+INV-1011,2024-03-10,TechFlow Solutions,Corporate,North,Electronics,Storage,2TB External SSD,199,10,40,Paid
+INV-1012,2024-03-15,Sarah Jenkins,Consumer,South,Furniture,Lighting,Floor Lamp,120,3,24,Paid
+INV-1013,2024-04-02,Urban Outfitters,Retail,West,Clothing,Accessories,Leather Belts,45,50,15,Paid
+INV-1014,2024-04-10,BuildIt Inc,Corporate,East,Supplies,Safety,Helmet Pack,300,5,60,Pending
+INV-1015,2024-04-18,Global Logistics,Corporate,North,Electronics,Networking,Router AX6000,299,4,60,Paid
+INV-1016,2024-05-01,Mike Ross,Consumer,West,Furniture,Chairs,Gaming Throne,499,1,100,Paid
+INV-1017,2024-05-05,Aura Design,Retail,South,Electronics,Tablets,Pro Tablet 11,799,2,160,Paid
+INV-1018,2024-05-12,Zenith Corp,Corporate,North,Electronics,Laptops,ThinkPad X1,1599,2,320,Paid
+INV-1019,2024-06-01,City Library,Public,East,Furniture,Seating,Bean Bags,80,10,16,Paid
+INV-1020,2024-06-07,Coffee House,Retail,West,Supplies,Cleaning,Sanitation Kit,150,5,30,Paid
