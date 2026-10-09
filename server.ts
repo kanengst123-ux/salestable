@@ -678,6 +678,161 @@ async function triggerSheetsSync(
   }
 }
 
+// Limited Offer (limit_offer tab in Google Sheet) persistence & sync
+// Title | Date_from | Date_to | Price_from | Price_to | Stock
+const LIMIT_OFFERS_FILE = path.join(process.cwd(), "limit_offers_backup.json");
+
+export interface LimitOfferEntry {
+  title: string;        // Title (Product Name)
+  date_from: string;    // Date_from (YYYY-MM-DD)
+  date_to: string;      // Date_to (YYYY-MM-DD)
+  price_from: string;   // Price_from (Original Price)
+  price_to: string;     // Price_to (Offer Price)
+  stock: string;        // Stock (Col AC of 'raw')
+  status?: "active" | "scheduled" | "expired";
+}
+
+function getLocalLimitOffers(): LimitOfferEntry[] {
+  try {
+    if (fs.existsSync(LIMIT_OFFERS_FILE)) {
+      return JSON.parse(fs.readFileSync(LIMIT_OFFERS_FILE, "utf-8"));
+    }
+  } catch (error) {
+    console.error("Failed to read limit offers backup:", error);
+  }
+  return [];
+}
+
+function saveLocalLimitOffers(offers: LimitOfferEntry[]) {
+  try {
+    fs.writeFileSync(LIMIT_OFFERS_FILE, JSON.stringify(offers, null, 2));
+  } catch (error) {
+    console.error("Failed to save limit offers backup:", error);
+  }
+}
+
+function computeOfferStatus(dateFrom: string, dateTo: string): "active" | "scheduled" | "expired" {
+  const now = new Date();
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(now);
+  const cleanFrom = (dateFrom || "").slice(0, 10);
+  const cleanTo = (dateTo || "").slice(0, 10);
+  if (cleanFrom && cleanTo) {
+    if (todayStr < cleanFrom) return "scheduled";
+    if (todayStr > cleanTo) return "expired";
+    return "active";
+  }
+  return "active";
+}
+
+async function fetchLimitOffersFromSheet(): Promise<LimitOfferEntry[]> {
+  const settings = getSheetSettings();
+  if (settings.enabled && settings.appsScriptUrl) {
+    // 1. Try POST with action getLimitOffers
+    try {
+      const response = await fetch(settings.appsScriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "getLimitOffers" })
+      });
+      if (response.ok) {
+        const text = await response.text();
+        try {
+          const parsed = JSON.parse(text);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const mapped: LimitOfferEntry[] = parsed.map((item: any) => ({
+              title: String(item.title || item.Title || item.name || "").trim(),
+              date_from: String(item.date_from || item.Date_from || item.startDate || "").slice(0, 10),
+              date_to: String(item.date_to || item.Date_to || item.endDate || "").slice(0, 10),
+              price_from: String(item.price_from !== undefined ? item.price_from : (item.Price_from !== undefined ? item.Price_from : "")),
+              price_to: String(item.price_to !== undefined ? item.price_to : (item.Price_to !== undefined ? item.Price_to : "")),
+              stock: String(item.stock !== undefined ? item.stock : (item.Stock !== undefined ? item.Stock : "")),
+              status: computeOfferStatus(item.date_from || item.Date_from, item.date_to || item.Date_to)
+            }));
+            saveLocalLimitOffers(mapped);
+            return mapped;
+          }
+        } catch (e) {}
+      }
+    } catch (err) {
+      console.warn("[limit_offer] fetchLimitOffersFromSheet POST error:", err);
+    }
+
+    // 2. Try GET with action=getLimitOffers
+    try {
+      const getUrl = `${settings.appsScriptUrl}${settings.appsScriptUrl.includes('?') ? '&' : '?'}action=getLimitOffers`;
+      const response = await fetch(getUrl);
+      if (response.ok) {
+        const text = await response.text();
+        try {
+          const parsed = JSON.parse(text);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const mapped: LimitOfferEntry[] = parsed.map((item: any) => ({
+              title: String(item.title || item.Title || item.name || "").trim(),
+              date_from: String(item.date_from || item.Date_from || item.startDate || "").slice(0, 10),
+              date_to: String(item.date_to || item.Date_to || item.endDate || "").slice(0, 10),
+              price_from: String(item.price_from !== undefined ? item.price_from : (item.Price_from !== undefined ? item.Price_from : "")),
+              price_to: String(item.price_to !== undefined ? item.price_to : (item.Price_to !== undefined ? item.Price_to : "")),
+              stock: String(item.stock !== undefined ? item.stock : (item.Stock !== undefined ? item.Stock : "")),
+              status: computeOfferStatus(item.date_from || item.Date_from, item.date_to || item.Date_to)
+            }));
+            saveLocalLimitOffers(mapped);
+            return mapped;
+          }
+        } catch (e) {}
+      }
+    } catch (err) {
+      console.warn("[limit_offer] fetchLimitOffersFromSheet GET error:", err);
+    }
+  }
+
+  // Fallback to local backup
+  const local = getLocalLimitOffers();
+  return local.map(item => ({
+    ...item,
+    status: computeOfferStatus(item.date_from, item.date_to)
+  }));
+}
+
+async function uploadLimitOffersToSheet(entries: LimitOfferEntry[]) {
+  // Update local backup (latest on top)
+  const current = getLocalLimitOffers();
+  const updated = [...entries, ...current];
+  saveLocalLimitOffers(updated);
+
+  // Sync to Google Sheet Apps Script limit_offer tab
+  const settings = getSheetSettings();
+  if (settings.enabled && settings.appsScriptUrl) {
+    try {
+      const response = await fetch(settings.appsScriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "addLimitOffer",
+          entries: entries
+        })
+      });
+      const txt = await response.text();
+      console.log(`[limit_offer sync to Sheet result]:`, txt);
+    } catch (err) {
+      console.error("[limit_offer] Failed to upload limit offers to Google Sheet:", err);
+    }
+  }
+
+  // Also sync Col O in raw if any entry is active today
+  const now = new Date();
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(now);
+  let localProducts = getLocalProducts();
+  for (const ent of entries) {
+    if (ent.date_from <= todayStr && todayStr <= ent.date_to) {
+      const p = localProducts.find((prod: any) => prod.name.trim() === ent.title.trim()) ||
+                productsCache.find((prod: any) => prod.name.trim() === ent.title.trim());
+      if (p) {
+        updateSingleProductPrice(p.id, p.name, ent.price_to, localProducts);
+      }
+    }
+  }
+}
+
 // Sales Promotion Campaign persistence (銷售訊息)
 const PROMOTIONS_FILE = path.join(process.cwd(), "promotions_backup.json");
 
@@ -864,81 +1019,72 @@ app.get("/api/sheet-settings", (req, res) => {
   res.json(getSheetSettings());
 });
 
-app.get("/api/sales-promotions", (req, res) => {
+// Limit Offers API (Google Sheet 'limit_offer' Tab)
+app.get("/api/limit-offers", async (req, res) => {
   try {
-    checkAndApplyPromotions();
-    res.json(getSalesPromotions());
+    const offers = await fetchLimitOffersFromSheet();
+    res.json(offers);
+  } catch (error: any) {
+    console.error("Error fetching limit offers:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/limit-offers", async (req, res) => {
+  try {
+    const { entries } = req.body;
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return res.status(400).json({ error: "Missing entries array" });
+    }
+    await uploadLimitOffersToSheet(entries);
+    const updated = await fetchLimitOffersFromSheet();
+    res.json({ success: true, offers: updated });
+  } catch (error: any) {
+    console.error("Error uploading limit offers:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/sales-promotions", async (req, res) => {
+  try {
+    const offers = await fetchLimitOffersFromSheet();
+    res.json(offers);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post("/api/sales-promotions", (req, res) => {
+app.post("/api/sales-promotions", async (req, res) => {
   try {
-    const { startDate, endDate, items } = req.body;
-    if (!startDate || !endDate || !Array.isArray(items) || items.length === 0) {
+    const { startDate, endDate, items, entries } = req.body;
+    let limitEntries: LimitOfferEntry[] = [];
+
+    if (Array.isArray(entries) && entries.length > 0) {
+      limitEntries = entries;
+    } else if (Array.isArray(items) && items.length > 0 && startDate && endDate) {
+      let localProducts = getLocalProducts();
+      limitEntries = items.map((it: any) => {
+        const prod = localProducts.find((p: any) => p.id === it.productId || p.name === it.productName) ||
+                     productsCache.find((p: any) => p.id === it.productId || p.name === it.productName);
+        const colAcStock = (prod && prod.allValues && prod.allValues[28] !== undefined && prod.allValues[28] !== "")
+          ? String(prod.allValues[28]).trim()
+          : (prod?.secondaryStockCount !== undefined && prod.secondaryStockCount !== "" ? String(prod.secondaryStockCount).trim() : (prod?.alwaysStock ? "長期充足" : "0"));
+        return {
+          title: it.productName || it.name || prod?.name || "",
+          date_from: startDate,
+          date_to: endDate,
+          price_from: String(it.originalPrice || prod?.price || ""),
+          price_to: String(it.promoPrice || it.price || ""),
+          stock: it.stock !== undefined ? String(it.stock) : colAcStock
+        };
+      });
+    } else {
       return res.status(400).json({ error: "Missing startDate, endDate, or items" });
     }
 
-    const campaigns = getSalesPromotions();
-    const now = new Date();
-    const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(now);
-    
-    // Earliest selectable start date is tomorrow (next day of current date)
-    const tomorrowDate = new Date();
-    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-    const tomorrowStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(tomorrowDate);
-
-    // Also support local calendar day tomorrow
-    const tomorrowLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-    const tomorrowLocalStr = `${tomorrowLocal.getFullYear()}-${String(tomorrowLocal.getMonth() + 1).padStart(2, '0')}-${String(tomorrowLocal.getDate()).padStart(2, '0')}`;
-    const minSelectableDate = tomorrowStr < tomorrowLocalStr ? tomorrowStr : tomorrowLocalStr;
-
-    if (startDate < minSelectableDate && startDate <= todayStr) {
-      return res.status(400).json({ error: `促銷開始日期最早只能選擇明天 (${minSelectableDate})` });
-    }
-
-    const isWithinRange = startDate <= todayStr && todayStr <= endDate;
-    let localProducts = getLocalProducts();
-
-    const campaignItems: PromoCampaignItem[] = items.map((it: any) => {
-      let currentPrice = it.originalPrice;
-      if (!currentPrice) {
-        const p = localProducts.find((p: any) => p.id === it.productId) || productsCache.find((p: any) => p.id === it.productId);
-        currentPrice = p?.price || "0";
-      }
-      return {
-        productId: it.productId,
-        productName: it.productName,
-        originalPrice: String(currentPrice),
-        promoPrice: String(it.promoPrice || it.price),
-        applied: false
-      };
-    });
-
-    const newCampaign: SalesPromotionCampaign = {
-      id: `promo-${Date.now()}`,
-      startDate,
-      endDate,
-      createdAt: now.toISOString(),
-      items: campaignItems,
-      status: isWithinRange ? "completed" : (todayStr > endDate ? "expired" : "scheduled")
-    };
-
-    if (isWithinRange) {
-      for (const it of newCampaign.items) {
-        updateSingleProductPrice(it.productId, it.productName, it.promoPrice, localProducts);
-        it.applied = true;
-        console.log(`[Sales Promo Applied immediately]: ${it.productName} -> ${it.promoPrice}`);
-      }
-      newCampaign.status = "completed"; // Changes have been written to Google Sheet Col O!
-      saveLocalProducts(localProducts);
-    }
-
-    campaigns.unshift(newCampaign);
-    saveSalesPromotions(campaigns);
-
-    res.json({ success: true, campaign: newCampaign, appliedNow: isWithinRange });
+    await uploadLimitOffersToSheet(limitEntries);
+    const updated = await fetchLimitOffersFromSheet();
+    res.json({ success: true, offers: updated, appliedNow: true });
   } catch (error: any) {
     console.error("Error creating sales promotion:", error);
     res.status(500).json({ error: error.message || "Failed to create sales promotion" });
@@ -2542,7 +2688,18 @@ app.get("/api/products", async (req, res) => {
     const filteredSheet = sheetProducts.filter(p => !localIds.has(p.id));
     const allRawProducts = [...localProducts, ...filteredSheet];
 
-    // Decorate products with cost tab category symbol, name, and costName
+    // Active limit offers from Google Sheet 'limit_offer' tab
+    let limitOffers: LimitOfferEntry[] = [];
+    try {
+      limitOffers = await fetchLimitOffersFromSheet();
+    } catch (e) {
+      limitOffers = getLocalLimitOffers();
+    }
+    const now = new Date();
+    const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong' }).format(now);
+    const activeOffers = limitOffers.filter(off => off.date_from <= todayStr && todayStr <= off.date_to);
+
+    // Decorate products with cost tab category symbol, name, and costName, and apply limit_offer prices
     const decoratedProducts = allRawProducts.map((p: any) => {
       let symbol = (costCategories.productIdToSymbol || {})[p.id] || "";
       let name = (costCategories.symbolToName || {})[symbol] || "";
@@ -2556,9 +2713,35 @@ app.get("/api/products", async (req, res) => {
         }
       }
 
+      // Check if product has active offer in limit_offer tab
+      const matchedOffer = activeOffers.find(off => 
+        off.title.trim().toLowerCase() === (p.name || "").trim().toLowerCase() ||
+        (p.id && off.title.trim() === p.id.trim())
+      );
+
+      let effectivePrice = p.price;
+      let originalPrice = p.price;
+      let hasLimitOffer = false;
+
+      if (matchedOffer && matchedOffer.price_to) {
+        effectivePrice = matchedOffer.price_to;
+        originalPrice = matchedOffer.price_from || p.price;
+        hasLimitOffer = true;
+      }
+
+      const updatedVals = p.allValues ? [...p.allValues] : [];
+      if (updatedVals.length > 14 && hasLimitOffer) {
+        updatedVals[14] = effectivePrice;
+      }
+
       return {
         ...p,
+        price: effectivePrice,
+        originalPrice: originalPrice,
+        hasLimitOffer: hasLimitOffer,
+        limitOfferDetails: matchedOffer || null,
         extraAttributes: p.extraAttributes || {},
+        allValues: updatedVals,
         costCategorySymbol: symbol,
         costCategoryName: name,
         costName: costName

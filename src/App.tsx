@@ -2556,13 +2556,13 @@ export default function App() {
   const fetchSavedPromotions = async () => {
     try {
       setLoadingPromotions(true);
-      const res = await fetch("/api/sales-promotions");
+      const res = await fetch("/api/limit-offers");
       if (res.ok) {
         const data = await res.json();
         setSavedPromotions(Array.isArray(data) ? data : []);
       }
     } catch (e) {
-      console.error("Failed to fetch promotions:", e);
+      console.error("Failed to fetch limit offers from Google Sheet:", e);
     } finally {
       setLoadingPromotions(false);
     }
@@ -2575,7 +2575,8 @@ export default function App() {
   // Format date helper for promotion (e.g., 2026-10-07 -> 07/10/2026)
   const formatPromoDate = (dateStr: string) => {
     if (!dateStr) return "";
-    const parts = dateStr.split("-");
+    const clean = String(dateStr).slice(0, 10);
+    const parts = clean.split("-");
     if (parts.length === 3) {
       return `${parts[2]}/${parts[1]}/${parts[0]}`;
     }
@@ -2680,49 +2681,40 @@ export default function App() {
 
     try {
       setIsSavingPromo(true);
-      const res = await fetch("/api/sales-promotions", {
+      // Map entries to Google Sheet 'limit_offer' tab schema:
+      // Title | Date_from | Date_to | Price_from | Price_to | Stock
+      // (Stock means the stock level as in Col AC of the 'raw' tab)
+      const entries = selectedPromoItems.map(it => {
+        const prod = products.find(p => p.id === it.id || p.name === it.name);
+        const colAcStock = (prod && prod.allValues && prod.allValues[28] !== undefined && prod.allValues[28] !== "")
+          ? String(prod.allValues[28]).trim()
+          : (prod?.secondaryStockCount !== undefined && prod.secondaryStockCount !== "" ? String(prod.secondaryStockCount).trim() : (prod?.alwaysStock ? "長期充足" : "0"));
+        return {
+          title: it.name,
+          date_from: promoStartDate,
+          date_to: promoEndDate,
+          price_from: it.originalPrice,
+          price_to: it.price,
+          stock: colAcStock
+        };
+      });
+
+      const res = await fetch("/api/limit-offers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          startDate: promoStartDate,
-          endDate: promoEndDate,
-          items: selectedPromoItems.map(it => ({
-            productId: it.id,
-            productName: it.name,
-            originalPrice: it.originalPrice,
-            promoPrice: it.price
-          }))
-        })
+        body: JSON.stringify({ entries })
       });
 
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || "儲存銷售促銷失敗");
+        throw new Error(data.error || "上傳至 limit_offer 失敗");
       }
 
-      if (data.appliedNow) {
-        setProducts(prev => {
-          return prev.map(p => {
-            const matched = selectedPromoItems.find(it => it.id === p.id);
-            if (matched) {
-              const updatedVals = [...(p.allValues || [])];
-              while (updatedVals.length < 33) updatedVals.push("");
-              updatedVals[14] = matched.price;
-              return {
-                ...p,
-                price: matched.price,
-                allValues: updatedVals
-              };
-            }
-            return p;
-          });
-        });
-        showToast(`✅ 銷售訊息儲存成功！共 ${selectedPromoItems.length} 款商品特價已寫入 Google Sheet raw 分頁 Col O (Price)！`);
-      } else {
-        showToast(`✅ 銷售訊息已成功排程！將於 ${formatPromoDate(promoStartDate)} 自動生效並寫入 Google Sheet raw 分頁 Col O (Price)。`);
-      }
-
-      fetchSavedPromotions();
+      showToast(`✅ 促銷特價已成功上傳至 Google Sheet「limit_offer」分頁 (共 ${entries.length} 筆，最新置頂)！特價完全依據 limit_offer 分頁即時生效。`);
+      
+      // Reload products so limit_offer price changes reflect immediately
+      loadProducts(true);
+      await fetchSavedPromotions();
       setPromoModalTab("history");
     } catch (err: any) {
       console.error("Save promotion error:", err);
@@ -7430,8 +7422,16 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           const appsScriptCode = `/**
- * Google Apps Script Web App Template for Salestable.
- * Fully compatible with your existing actions (addProduct, addCustomer, writeTradeLog, deleteOrder, etc.)
+ * Salestable Google Apps Script 雲端同步核心服務 (雙 App 完整相容版 - 含 limit_offer 限時特價)
+ * 支援功能：
+ * 1. addProduct / updateProduct (安全同步商品資料與價格)
+ * 2. recordPurchase (記錄進貨與庫存異動至 Purchase 分頁)
+ * 3. addCustomer (新增客戶等級至 customer_cat)
+ * 4. writeTradeLog (寫入 Trade_Log / Trade_log_admin 並扣庫存)
+ * 5. revertTradeLog (取消訂單回補 raw 庫存 - 供另一個 App 使用)
+ * 6. deleteOrder (按下「修改」、「暫存」或「刪除」時，自動清除 Trade_Log 對應列並依需求回補庫存)
+ * 7. addLimitOffer (將「銷售訊息」限時促銷寫入 limit_offer 分頁，最新置頂)
+ * 8. getLimitOffers (供「促銷記錄」直接從 limit_offer 分頁讀取最新特價)
  */
 
 function doPost(e) {
@@ -7702,6 +7702,121 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     
+    // Action: addLimitOffer (Upload limited time offers to 'limit_offer' tab, latest on top)
+    // Schema: Title | Date_from | Date_to | Price_from | Price_to | Stock (Col AC of 'raw')
+    if (action === 'addLimitOffer' || action === 'uploadLimitOffer') {
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      var sheet = ss.getSheetByName('limit_offer') || ss.getSheetByName('Limit_offer') || ss.getSheetByName('Limit_Offer');
+      if (!sheet) {
+        sheet = ss.insertSheet('limit_offer');
+      }
+      
+      var headers = ['Title', 'Date_from', 'Date_to', 'Price_from', 'Price_to', 'Stock'];
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow(headers);
+        sheet.getRange(1, 1, 1, 6).setFontWeight('bold').setBackground('#f1f5f9');
+      } else {
+        var firstCell = sheet.getRange(1, 1).getValue();
+        if (!firstCell || firstCell.toString().trim() === '') {
+          sheet.getRange(1, 1, 1, 6).setValues([headers]);
+          sheet.getRange(1, 1, 1, 6).setFontWeight('bold').setBackground('#f1f5f9');
+        }
+      }
+
+      var entries = param.entries || [];
+      if (!Array.isArray(entries) && param.title) {
+        entries = [param];
+      }
+
+      if (entries.length === 0) {
+        return ContentService.createTextOutput(JSON.stringify({ status: 'success', message: 'No entries to add' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+
+      var rawSheet = ss.getSheetByName('raw') || ss.getSheets()[0];
+      var rawData = rawSheet ? rawSheet.getDataRange().getValues() : [];
+
+      var rowsToAdd = [];
+      for (var eIdx = 0; eIdx < entries.length; eIdx++) {
+        var item = entries[eIdx];
+        var title = (item.title || item.name || '').toString().trim();
+        var dateFrom = item.date_from || item.dateFrom || item.startDate || '';
+        var dateTo = item.date_to || item.dateTo || item.endDate || '';
+        var priceFrom = item.price_from !== undefined ? item.price_from : (item.priceFrom !== undefined ? item.priceFrom : item.originalPrice);
+        var priceTo = item.price_to !== undefined ? item.price_to : (item.priceTo !== undefined ? item.priceTo : (item.promoPrice || item.price));
+        
+        var stockVal = item.stock;
+        if (stockVal === undefined || stockVal === null || stockVal === '') {
+          if (rawSheet && title) {
+            for (var r = 1; r < rawData.length; r++) {
+              var rTitle = (rawData[r][2] || '').toString().trim();
+              var rId = (rawData[r][1] || '').toString().trim();
+              if (rTitle === title || (item.id && rId === item.id.toString().trim())) {
+                stockVal = rawData[r][28]; // Col AC is index 28
+                break;
+              }
+            }
+          }
+        }
+        if (stockVal === undefined || stockVal === null) stockVal = '';
+
+        rowsToAdd.push([
+          title,
+          dateFrom,
+          dateTo,
+          priceFrom !== undefined ? priceFrom : '',
+          priceTo !== undefined ? priceTo : '',
+          stockVal
+        ]);
+      }
+
+      // Latest on top: insert rows at Row 2 (directly below the header row)
+      if (rowsToAdd.length > 0) {
+        sheet.insertRowsBefore(2, rowsToAdd.length);
+        sheet.getRange(2, 1, rowsToAdd.length, 6).setValues(rowsToAdd);
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({ 
+        status: 'success', 
+        message: 'Successfully added ' + rowsToAdd.length + ' offers to limit_offer (latest on top)',
+        count: rowsToAdd.length
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Action: getLimitOffers (Reads limit_offer tab)
+    if (action === 'getLimitOffers') {
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      var sheet = ss.getSheetByName('limit_offer') || ss.getSheetByName('Limit_offer') || ss.getSheetByName('Limit_Offer');
+      if (!sheet || sheet.getLastRow() < 2) {
+        return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
+      }
+      var numRows = sheet.getLastRow() - 1;
+      var values = sheet.getRange(2, 1, numRows, 6).getValues();
+      var offers = [];
+      for (var i = 0; i < values.length; i++) {
+        var row = values[i];
+        if (row[0] && row[0].toString().trim() !== '') {
+          var dFrom = row[1];
+          if (dFrom instanceof Date) {
+            dFrom = Utilities.formatDate(dFrom, Session.getScriptTimeZone() || "GMT+8", "yyyy-MM-dd");
+          }
+          var dTo = row[2];
+          if (dTo instanceof Date) {
+            dTo = Utilities.formatDate(dTo, Session.getScriptTimeZone() || "GMT+8", "yyyy-MM-dd");
+          }
+          offers.push({
+            title: row[0].toString().trim(),
+            date_from: dFrom ? dFrom.toString().trim() : '',
+            date_to: dTo ? dTo.toString().trim() : '',
+            price_from: row[3] !== undefined && row[3] !== null ? row[3].toString().trim() : '',
+            price_to: row[4] !== undefined && row[4] !== null ? row[4].toString().trim() : '',
+            stock: row[5] !== undefined && row[5] !== null ? row[5].toString().trim() : ''
+          });
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify(offers)).setMimeType(ContentService.MimeType.JSON);
+    }
+
     // 2. Action: addCustomer
     if (action === 'addCustomer') {
       var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('customer_cat') || 
@@ -7993,6 +8108,42 @@ function doGet(e) {
   try {
     var action = e.parameter.action;
 
+    // Action: getLimitOffers (Reads limit_offer tab directly)
+    if (action === 'getLimitOffers') {
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      var sheet = ss.getSheetByName('limit_offer') || ss.getSheetByName('Limit_offer') || ss.getSheetByName('Limit_Offer');
+      if (!sheet || sheet.getLastRow() < 2) {
+        return ContentService.createTextOutput(JSON.stringify([]))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      var numRows = sheet.getLastRow() - 1;
+      var values = sheet.getRange(2, 1, numRows, 6).getValues();
+      var offers = [];
+      for (var i = 0; i < values.length; i++) {
+        var row = values[i];
+        if (row[0] && row[0].toString().trim() !== '') {
+          var dFrom = row[1];
+          if (dFrom instanceof Date) {
+            dFrom = Utilities.formatDate(dFrom, Session.getScriptTimeZone() || "GMT+8", "yyyy-MM-dd");
+          }
+          var dTo = row[2];
+          if (dTo instanceof Date) {
+            dTo = Utilities.formatDate(dTo, Session.getScriptTimeZone() || "GMT+8", "yyyy-MM-dd");
+          }
+          offers.push({
+            title: row[0].toString().trim(),
+            date_from: dFrom ? dFrom.toString().trim() : '',
+            date_to: dTo ? dTo.toString().trim() : '',
+            price_from: row[3] !== undefined && row[3] !== null ? row[3].toString().trim() : '',
+            price_to: row[4] !== undefined && row[4] !== null ? row[4].toString().trim() : '',
+            stock: row[5] !== undefined && row[5] !== null ? row[5].toString().trim() : ''
+          });
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify(offers))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     // Action: getPurchases
     if (action === 'getPurchases') {
       var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -8153,7 +8304,10 @@ function doGet(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     
-    return ContentService.createTextOutput("Google Apps Script Web App is active and listening.");
+    return ContentService.createTextOutput(JSON.stringify({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString() 
+    })).setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
     return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: error.toString() }))
       .setMimeType(ContentService.MimeType.JSON);
@@ -9445,134 +9599,145 @@ function revertStockForOrders(orderIdsMap) {
                 </div>
               )}
 
-              {/* Tab 3: History & Active Campaigns */}
+              {/* Tab 3: History & limit_offer Data directly from Google Sheet */}
               {promoModalTab === "history" && (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pb-2 border-b border-slate-100">
                     <div>
-                      <h4 className="font-black text-slate-900 text-sm">
-                        所有促銷訊息記錄 (Promotions History)
-                      </h4>
-                      <p className="text-[11px] text-slate-500">
-                        查看歷史促銷設定，或隨時手動提前還原原價
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-black text-slate-900 text-sm">
+                          Google Sheet「limit_offer」促銷清單
+                        </h4>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          雲端即時連線 (最新置頂)
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Title • Date_from • Date_to • Price_from • Price_to • Stock (raw Col AC)
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={fetchSavedPromotions}
-                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold flex items-center gap-1.5 text-slate-700 cursor-pointer shadow-2xs"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${loadingPromotions ? "animate-spin" : ""}`} />
-                      <span>重新整理</span>
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={fetchSavedPromotions}
+                        className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold flex items-center gap-1.5 text-slate-700 cursor-pointer shadow-2xs"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${loadingPromotions ? "animate-spin" : ""}`} />
+                        <span>重新載入</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (savedPromotions.length === 0) {
+                            showToast("limit_offer 分頁目前尚無資料！");
+                            return;
+                          }
+                          handleGeneratePromoPdf(
+                            savedPromotions.map((it: any) => ({
+                              id: it.title,
+                              name: it.title,
+                              price: it.price_to,
+                              originalPrice: it.price_from
+                            })),
+                            savedPromotions[0]?.date_from,
+                            savedPromotions[0]?.date_to
+                          );
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-800 text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                      >
+                        <FileText className="w-3.5 h-3.5 text-rose-600" />
+                        <span>匯出 PDF</span>
+                      </button>
+                    </div>
                   </div>
 
-                  {savedPromotions.length === 0 ? (
+                  {loadingPromotions ? (
+                    <div className="p-12 text-center text-slate-500 flex flex-col items-center justify-center gap-3">
+                      <RefreshCw className="w-6 h-6 animate-spin text-rose-600" />
+                      <span className="text-xs font-bold">正在從 Google Sheet「limit_offer」分頁載入最新資料...</span>
+                    </div>
+                  ) : savedPromotions.length === 0 ? (
                     <div className="p-12 text-center text-slate-400 border border-dashed border-slate-200 rounded-2xl">
-                      目前沒有任何歷史促銷記錄。點擊上方「建立特價清單」發布第一個促銷！
+                      Google Sheet「limit_offer」分頁目前尚無促銷資料。點擊上方「商品選取」建立特價清單並上傳！
                     </div>
                   ) : (
-                    <div className="space-y-3">
-                      {savedPromotions.map((camp: any) => {
-                        const isCompleted = camp.status === "completed" || camp.status === "active";
-                        const isReverted = camp.status === "reverted";
-                        const isExpired = camp.status === "expired";
-                        const isScheduled = camp.status === "scheduled";
+                    <div className="space-y-2.5">
+                      {savedPromotions.map((item: any, idx: number) => {
+                        const isActive = item.status === "active";
+                        const isScheduled = item.status === "scheduled";
+                        const isExpired = item.status === "expired";
+
+                        const pFrom = parseFloat(item.price_from) || 0;
+                        const pTo = parseFloat(item.price_to) || 0;
+                        const discountDiff = pFrom > pTo ? (pFrom - pTo).toFixed(2) : null;
 
                         return (
                           <div
-                            key={camp.id}
-                            className={`p-3.5 sm:p-4 rounded-2xl border transition-all ${
-                              isCompleted
+                            key={`${item.title}-${item.date_from}-${idx}`}
+                            className={`p-3 sm:p-3.5 rounded-2xl border transition-all ${
+                              isActive
                                 ? "bg-emerald-50/50 border-emerald-200 shadow-xs"
                                 : isScheduled
                                 ? "bg-blue-50/40 border-blue-200"
-                                : isReverted
-                                ? "bg-slate-50/60 border-slate-200 opacity-80"
-                                : "bg-white border-slate-200"
+                                : "bg-slate-50/60 border-slate-200 opacity-80"
                             }`}
                           >
-                            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+                            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pb-2 border-b border-slate-100">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full ${
-                                  isCompleted
+                                <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full ${
+                                  isActive
                                     ? "bg-emerald-600 text-white shadow-2xs"
                                     : isScheduled
                                     ? "bg-blue-100 text-blue-800"
-                                    : isReverted
-                                    ? "bg-slate-200 text-slate-600"
-                                    : "bg-amber-100 text-amber-800"
+                                    : "bg-slate-200 text-slate-600"
                                 }`}>
-                                  {isCompleted
-                                    ? "✓ 已完成 (已寫入Col O)"
+                                  {isActive
+                                    ? "🟢 生效中 (進行中)"
                                     : isScheduled
-                                    ? `🕒 排程中 (將於生效日 ${formatPromoDate(camp.startDate)} 寫入Col O)`
-                                    : isReverted
-                                    ? "↩ 已還原原價 (已寫入Col O)"
-                                    : "✓ 促銷期結束 (已還原)"}
+                                    ? "🕒 排程中"
+                                    : "⚪ 已過期"}
                                 </span>
                                 <span className="font-mono text-xs font-bold text-slate-700">
-                                  {formatPromoDate(camp.startDate)} 至 {formatPromoDate(camp.endDate)}
+                                  {formatPromoDate(item.date_from)} 至 {formatPromoDate(item.date_to)}
+                                </span>
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-600">
+                                  Col AC 庫存: <strong>{item.stock !== undefined && item.stock !== "" ? item.stock : "0"}</strong>
                                 </span>
                               </div>
 
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <button
-                                  type="button"
-                                  onClick={() => handleGeneratePromoPdf(camp.items.map((it: any) => ({
-                                    id: it.productId,
-                                    name: it.productName,
-                                    price: it.promoPrice,
-                                    originalPrice: it.originalPrice
-                                  })), camp.startDate, camp.endDate)}
-                                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1 cursor-pointer shadow-2xs"
-                                >
-                                  <FileText className="w-3.5 h-3.5 text-rose-600" />
-                                  <span>匯出 PDF</span>
-                                </button>
-
-                                {isCompleted && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRevertPromotion(camp.id)}
-                                    className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold cursor-pointer shadow-2xs"
-                                    title="提前結束促銷並恢復 Google Sheet 原價"
-                                  >
-                                    提前還原原價
-                                  </button>
-                                )}
-
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeletePromotion(camp.id)}
-                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                                  title="刪除此記錄"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleGeneratePromoPdf([{
+                                  id: item.title,
+                                  name: item.title,
+                                  price: item.price_to,
+                                  originalPrice: item.price_from
+                                }], item.date_from, item.date_to)}
+                                className="px-2 py-0.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-bold flex items-center gap-1 cursor-pointer shadow-2xs"
+                              >
+                                <FileText className="w-3 h-3 text-rose-600" />
+                                <span>單項 PDF</span>
+                              </button>
                             </div>
 
-                            <div className="pt-3">
-                              <div className="text-[11px] font-bold text-slate-500 mb-2">
-                                促銷商品清單（共 {camp.items?.length || 0} 款）：
+                            <div className="pt-2 flex items-center justify-between gap-3">
+                              <div className="font-bold text-slate-900 text-xs sm:text-sm truncate max-w-[280px] sm:max-w-md" title={item.title}>
+                                {item.title}
                               </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto">
-                                {(camp.items || []).map((it: any) => (
-                                  <div key={it.productId} className="flex items-center justify-between p-2 rounded-xl bg-white border border-slate-100 text-xs">
-                                    <span className="font-bold text-slate-800 truncate max-w-[200px]" title={it.productName}>
-                                      {it.productName}
-                                    </span>
-                                    <div className="flex items-center gap-2 font-mono shrink-0">
-                                      <span className="text-slate-400 line-through text-[10px]">
-                                        HK${parseFloat(it.originalPrice).toFixed(2)}
-                                      </span>
-                                      <span className="font-black text-rose-700">
-                                        HK${parseFloat(it.promoPrice).toFixed(2)}
-                                      </span>
-                                    </div>
-                                  </div>
-                                ))}
+                              <div className="flex items-center gap-2 font-mono shrink-0">
+                                {item.price_from && (
+                                  <span className="text-slate-400 line-through text-xs">
+                                    HK${parseFloat(item.price_from).toFixed(2)}
+                                  </span>
+                                )}
+                                <span className="font-black text-rose-700 text-sm sm:text-base">
+                                  HK${parseFloat(item.price_to).toFixed(2)}
+                                </span>
+                                {discountDiff && (
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-rose-100 text-rose-700">
+                                    -HK${discountDiff}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -9588,7 +9753,7 @@ function revertStockForOrders(orderIdsMap) {
             <div className="p-4 sm:p-5 border-t border-slate-100 bg-slate-50/80 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
               <div className="text-xs text-slate-500">
                 {promoModalTab === "history" ? (
-                  <span>共 {savedPromotions.length} 筆促銷記錄</span>
+                  <span>共 {savedPromotions.length} 筆 Google Sheet limit_offer 記錄</span>
                 ) : (
                   <span>
                     已選取 <strong>{selectedPromoItems.length}</strong> 款商品 • 有效期：
